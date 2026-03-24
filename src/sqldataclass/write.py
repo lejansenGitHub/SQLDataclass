@@ -69,6 +69,6 @@ def flatten_for_table(
         for key, value in raw.items()
         if key not in exclude_keys
         and key not in rel_keys
-        and not isinstance(value, dict)
+        and not isinstance(value, (dict, list))
         and not dataclasses.is_dataclass(value)
     }

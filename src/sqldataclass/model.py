@@ -178,10 +178,14 @@ class RelationshipInfo:
     """Marks a field as a relationship (not a database column).
 
     For many-to-one: the FK is inferred from existing Field(foreign_key=...) columns.
+    For one-to-many: type hint is ``list[ChildModel]``.
+    For many-to-many: type hint is ``list[TargetModel]`` with ``link_model`` set.
     For discriminated unions: set ``discriminator`` to the column that selects the variant.
     """
 
     discriminator: str | None = None
+    back_populates: str | None = None
+    link_model: Any = None
 
 
 def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
@@ -284,6 +288,8 @@ def Field(  # noqa: PLR0913
 def Relationship(
     default: Any = _UNSET,
     *,
+    back_populates: str | None = None,
+    link_model: Any = None,
     discriminator: str | None = None,
 ) -> Any:
     """Mark a field as a relationship — not stored as a database column.
@@ -292,19 +298,36 @@ def Relationship(
 
         team: Team | None = Relationship()
 
+    One-to-many (detected from ``list[X]`` type hint)::
+
+        heroes: list[Hero] = Relationship(back_populates="team")
+
+    Many-to-many (via link table)::
+
+        teams: list[Team] = Relationship(link_model=HeroTeamLink)
+
     Discriminated union::
 
         data: NormalData | BatteryData = Relationship(discriminator="behavior")
-
-    The join condition is inferred from ``Field(foreign_key=...)`` columns.
     """
-    rel_info = RelationshipInfo(discriminator=discriminator)
+    rel_info = RelationshipInfo(
+        discriminator=discriminator,
+        back_populates=back_populates,
+        link_model=link_model,
+    )
 
-    # Default: None for optional many-to-one, required for discriminated unions
     pydantic_kwargs: dict[str, Any] = {}
     if default is not _UNSET:
         pydantic_kwargs["default"] = default
-    elif discriminator is None:
+    elif discriminator is not None:
+        pass  # required field for discriminated unions
+    else:
+        # Default: None for scalar, list factory for collections.
+        # The actual default_factory for list[] types is set here;
+        # pydantic can't distinguish scalar vs list from FieldInfo alone,
+        # so callers should use default_factory=list for list fields.
+        # For simplicity, default to None — _hydrate_row initializes [] for collections,
+        # and _populate_collections fills them in. Manual construction needs explicit [].
         pydantic_kwargs["default"] = None
 
     field_info: Any = PydanticField(**pydantic_kwargs)
@@ -403,6 +426,9 @@ class _ResolvedRelationship:
     target_types: list[Any]  # [Team] for many-to-one, [NormalData, BatteryData] for union
     discriminator: str | None
     is_optional: bool
+    kind: str  # "many_to_one", "one_to_many", "many_to_many", "discriminated"
+    back_populates: str | None = None
+    link_model: Any = None
 
 
 def _resolve_relationships(
@@ -421,13 +447,30 @@ def _resolve_relationships(
         assert rel_info is not None
 
         inner, is_optional = _unwrap_optional(type_hint)
-        variants = _unwrap_union_variants(inner) if rel_info.discriminator else [inner]
+
+        # Detect kind from type hint
+        if rel_info.discriminator:
+            kind = "discriminated"
+            variants = _unwrap_union_variants(inner)
+            target_types = variants
+        elif get_origin(inner) is list:
+            # list[X] → one-to-many or many-to-many
+            args = get_args(inner)
+            element_type = args[0] if args else Any
+            target_types = [element_type]
+            kind = "many_to_many" if rel_info.link_model is not None else "one_to_many"
+        else:
+            kind = "many_to_one"
+            target_types = [inner]
 
         rels[field_name] = _ResolvedRelationship(
             field_name=field_name,
-            target_types=variants,
+            target_types=target_types,
             discriminator=rel_info.discriminator,
-            is_optional=is_optional or rel_info.discriminator is None,
+            is_optional=is_optional or kind == "many_to_one",
+            kind=kind,
+            back_populates=rel_info.back_populates,
+            link_model=rel_info.link_model,
         )
     return rels
 
@@ -446,17 +489,28 @@ def _find_fk_join_condition(source_table: Table, target_table: Table) -> Any | N
     return None
 
 
+def _has_join_relationships(relationships: dict[str, _ResolvedRelationship]) -> bool:
+    """Check if any relationships require JOINs (many-to-one or discriminated)."""
+    return any(rel.kind in ("many_to_one", "discriminated") for rel in relationships.values())
+
+
 def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
-    """Build a SELECT with labeled columns and JOINs for all relationships."""
+    """Build a SELECT with labeled columns and JOINs for scalar relationships.
+
+    Collection relationships (one-to-many, many-to-many) are loaded via
+    separate queries in ``_populate_collections``, not via JOINs.
+    """
     base_table: Table = cls.__table__
     relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
 
     # Label base table columns with prefix to avoid name collisions
     labeled: list[Any] = [c.label(f"__base__{c.name}") for c in base_table.columns]
 
-    # Build join chain and collect labeled columns for each related table
+    # Build join chain — only for scalar relationships (many-to-one, discriminated)
     base_from: Any = base_table
     for field_name, rel in relationships.items():
+        if rel.kind in ("one_to_many", "many_to_many"):
+            continue  # loaded separately
         for target_type in rel.target_types:
             if not hasattr(target_type, "__table__"):
                 continue
@@ -533,12 +587,178 @@ def _hydrate_row(cls: Any, row: Any) -> Any:
     base_data = _extract_prefixed(row_dict, "__base__")
 
     for field_name, rel in relationships.items():
-        if rel.discriminator:
+        if rel.kind in ("one_to_many", "many_to_many"):
+            base_data[field_name] = []  # placeholder, populated later
+        elif rel.kind == "discriminated":
             base_data[field_name] = _hydrate_discriminated(row_dict, base_data, rel)
         else:
             base_data[field_name] = _hydrate_many_to_one(row_dict, rel)
 
     return cls(**base_data)
+
+
+# ---------------------------------------------------------------------------
+# Collection relationship loading (one-to-many, many-to-many)
+# ---------------------------------------------------------------------------
+
+_MODEL_REGISTRY: dict[str, Any] = {}
+
+
+def _get_pk_column(cls: Any) -> Column[Any]:
+    """Get the single primary key column for a table model."""
+    pk_cols = list(cls.__table__.primary_key.columns)
+    if len(pk_cols) != 1:
+        msg = f"Collection relationships require a single-column PK, got {len(pk_cols)} on {cls}"
+        raise TypeError(msg)
+    result: Column[Any] = pk_cols[0]
+    return result
+
+
+def _find_fk_column(child_table: Table, parent_table: Table) -> Column[Any] | None:
+    """Find the FK column on child_table that references parent_table."""
+    for col in child_table.columns:
+        for fk in col.foreign_keys:
+            if fk.column.table is parent_table:
+                return col
+    return None
+
+
+def _resolve_forward_ref(tp: Any) -> Any:
+    """Resolve a string forward reference to a model class via the registry."""
+    if isinstance(tp, str):
+        # Try direct tablename lookup
+        resolved = _MODEL_REGISTRY.get(tp)
+        if resolved is not None:
+            return resolved
+        # Try snake_case conversion
+        snake = _default_tablename(tp)
+        resolved = _MODEL_REGISTRY.get(snake)
+        if resolved is not None:
+            return resolved
+        # Try class name match
+        for registered_cls in _MODEL_REGISTRY.values():
+            if registered_cls.__name__ == tp:
+                return registered_cls
+    return tp
+
+
+def _ensure_resolved(rel: _ResolvedRelationship) -> None:
+    """Resolve any string forward references in target_types."""
+    rel.target_types = [_resolve_forward_ref(t) for t in rel.target_types]
+
+
+def _populate_collections(
+    cls: Any,
+    parents: list[Any],
+    conn: Connection,
+) -> None:
+    """Load one-to-many and many-to-many children and attach to parent instances.
+
+    Uses a two-query strategy: one query per collection relationship that loads
+    ALL children for ALL parents at once (no N+1).
+    """
+    relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
+    collection_rels = {k: v for k, v in relationships.items() if v.kind in ("one_to_many", "many_to_many")}
+    if not collection_rels or not parents:
+        return
+
+    parent_table: Table = cls.__table__
+    pk_col = _get_pk_column(cls)
+    pk_name = pk_col.name
+    parent_pks = [getattr(p, pk_name) for p in parents]
+    pk_to_parents: dict[Any, list[Any]] = {}
+    for p in parents:
+        pk_to_parents.setdefault(getattr(p, pk_name), []).append(p)
+
+    for field_name, rel in collection_rels.items():
+        _ensure_resolved(rel)
+        child_type = rel.target_types[0]
+        if not hasattr(child_type, "__table__"):
+            continue
+
+        if rel.kind == "one_to_many":
+            _load_one_to_many(conn, field_name, child_type, parent_table, parent_pks, pk_to_parents)
+        elif rel.kind == "many_to_many" and rel.link_model is not None:
+            _load_many_to_many(conn, field_name, child_type, rel.link_model, parent_table, parent_pks, pk_to_parents)
+
+
+def _load_one_to_many(  # noqa: PLR0913
+    conn: Connection,
+    field_name: str,
+    child_type: Any,
+    parent_table: Table,
+    parent_pks: list[Any],
+    pk_to_parents: dict[Any, list[Any]],
+) -> None:
+    """Load children for a one-to-many relationship."""
+    child_table: Table = child_type.__table__
+    fk_col = _find_fk_column(child_table, parent_table)
+    if fk_col is None:
+        return
+
+    query = sa_select(child_table).where(fk_col.in_(parent_pks))
+    children_by_fk: dict[Any, list[Any]] = {}
+    for row in conn.execute(query).mappings():
+        child = child_type(**row)
+        fk_value = row[fk_col.name]
+        children_by_fk.setdefault(fk_value, []).append(child)
+
+    for pk_val, parent_list in pk_to_parents.items():
+        children = children_by_fk.get(pk_val, [])
+        for parent in parent_list:
+            object.__setattr__(parent, field_name, children)
+
+
+def _load_many_to_many(  # noqa: PLR0913
+    conn: Connection,
+    field_name: str,
+    target_type: Any,
+    link_model: Any,
+    parent_table: Table,
+    parent_pks: list[Any],
+    pk_to_parents: dict[Any, list[Any]],
+) -> None:
+    """Load targets for a many-to-many relationship via a link table."""
+    if not hasattr(link_model, "__table__") or not hasattr(target_type, "__table__"):
+        return
+
+    link_table: Table = link_model.__table__
+    target_table: Table = target_type.__table__
+
+    # Find FK from link → parent (source) and link → target
+    source_fk_col = _find_fk_column(link_table, parent_table)
+    target_fk_col = _find_fk_column(link_table, target_table)
+    if source_fk_col is None or target_fk_col is None:
+        return
+
+    # Find the PK column on target
+    target_pk_cols = list(target_table.primary_key.columns)
+    if not target_pk_cols:
+        return
+    target_pk = target_pk_cols[0]
+
+    # SELECT link.source_fk, target.* FROM link JOIN target ON link.target_fk = target.pk
+    # WHERE link.source_fk IN (parent_pks)
+    labeled_source_fk = source_fk_col.label("__link_source_fk__")
+    target_labeled = [c.label(f"__target__{c.name}") for c in target_table.columns]
+
+    query = (
+        sa_select(labeled_source_fk, *target_labeled)
+        .select_from(link_table.join(target_table, target_fk_col == target_pk))
+        .where(source_fk_col.in_(parent_pks))
+    )
+
+    targets_by_source: dict[Any, list[Any]] = {}
+    for row in conn.execute(query).mappings():
+        source_fk_val = row["__link_source_fk__"]
+        target_data = _extract_prefixed(dict(row), "__target__")
+        target = target_type(**target_data)
+        targets_by_source.setdefault(source_fk_val, []).append(target)
+
+    for pk_val, parent_list in pk_to_parents.items():
+        targets = targets_by_source.get(pk_val, [])
+        for parent in parent_list:
+            object.__setattr__(parent, field_name, targets)
 
 
 # ---------------------------------------------------------------------------
@@ -643,6 +863,8 @@ def _build_sqldataclass(
         dc_cls.metadata = target_metadata
         dc_cls.c = sa_table.c
         _attach_convenience_methods(dc_cls)
+        # Register for forward reference resolution
+        _MODEL_REGISTRY[tablename] = dc_cls
     else:
         dc_cls.metadata = target_metadata
 
@@ -654,7 +876,7 @@ def _build_sqldataclass(
 # ---------------------------------------------------------------------------
 
 
-def _attach_convenience_methods(cls: Any) -> None:
+def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
     """Attach query/write convenience methods to a table class."""
 
     def _select(klass: Any) -> Any:
@@ -669,38 +891,62 @@ def _attach_convenience_methods(cls: Any) -> None:
     ) -> list[Any]:
         """Load all matching rows as instances of this class.
 
-        If the model has relationships, auto-JOINs related tables and hydrates
-        nested objects.
+        Scalar relationships (many-to-one, discriminated) are loaded via JOINs.
+        Collection relationships (one-to-many, many-to-many) are loaded via
+        separate queries (two-query strategy, no N+1).
         """
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
-        if rels:
+        if _has_join_relationships(rels):
             query = _build_joined_query(klass, where=where, order_by=order_by)
-            return [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
+            results = [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
+        elif rels:
+            # Has only collection relationships, no JOINs needed for parent
+            query = sa_select(klass.__table__)
+            if where is not None:
+                query = query.where(where)
+            if order_by is not None:
+                query = query.order_by(order_by)
+            results = _load_all(conn, query, klass)
+        else:
+            query = sa_select(klass.__table__)
+            if where is not None:
+                query = query.where(where)
+            if order_by is not None:
+                query = query.order_by(order_by)
+            return _load_all(conn, query, klass)
 
-        query = sa_select(klass.__table__)
-        if where is not None:
-            query = query.where(where)
-        if order_by is not None:
-            query = query.order_by(order_by)
-        return _load_all(conn, query, klass)
+        # Populate collection relationships (one-to-many, many-to-many)
+        _populate_collections(klass, results, conn)
+        return results
 
     def _model_load_one(klass: Any, conn: Connection, where: Any = None) -> Any | None:
         """Load a single row, or ``None`` if not found."""
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
-        if rels:
+        if _has_join_relationships(rels):
             query = _build_joined_query(klass, where=where)
             row = conn.execute(query).mappings().one_or_none()
             if row is None:
                 return None
-            return _hydrate_row(klass, row)
+            result = _hydrate_row(klass, row)
+        elif rels:
+            query = sa_select(klass.__table__)
+            if where is not None:
+                query = query.where(where)
+            flat_row = _fetch_one(conn, query)
+            if flat_row is None:
+                return None
+            result = klass(**flat_row)
+        else:
+            query = sa_select(klass.__table__)
+            if where is not None:
+                query = query.where(where)
+            flat_row = _fetch_one(conn, query)
+            if flat_row is None:
+                return None
+            return klass(**flat_row)
 
-        query = sa_select(klass.__table__)
-        if where is not None:
-            query = query.where(where)
-        flat_row = _fetch_one(conn, query)
-        if flat_row is None:
-            return None
-        return klass(**flat_row)
+        _populate_collections(klass, [result], conn)
+        return result
 
     def _model_insert_many(klass: Any, conn: Connection, objects: Sequence[Any]) -> None:
         """Bulk-insert multiple instances."""
