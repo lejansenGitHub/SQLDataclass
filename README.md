@@ -177,9 +177,48 @@ alembic revision --autogenerate -m "add heroes table"
 alembic upgrade head
 ```
 
-Alembic detects changes between your model definitions and the actual database schema, then generates migration scripts for adding/removing columns, creating tables, etc.
+**Example: adding a column to an existing model**
 
-This replaces `metadata.create_all()` for production — use `create_all()` only for development/testing, and Alembic for production deployments.
+Start with:
+
+```python
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+```
+
+Later, add a field:
+
+```python
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    power: str = ""           # new column
+    age: int | None = None    # new nullable column
+```
+
+Then generate and apply the migration:
+
+```bash
+alembic revision --autogenerate -m "add power and age to hero"
+alembic upgrade head
+```
+
+Alembic auto-detects the diff and generates:
+
+```python
+def upgrade():
+    op.add_column('hero', sa.Column('power', sa.String(), nullable=False))
+    op.add_column('hero', sa.Column('age', sa.Integer(), nullable=True))
+
+def downgrade():
+    op.drop_column('hero', 'age')
+    op.drop_column('hero', 'power')
+```
+
+This works for any schema change: adding/removing columns, renaming tables, changing types, adding indexes, etc.
+
+Use `create_all()` for development/testing and Alembic for production deployments.
 
 ## Relationships
 
