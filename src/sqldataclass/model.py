@@ -18,7 +18,17 @@ import types
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, ClassVar, Sequence, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Self,
+    Sequence,
+    dataclass_transform,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 from uuid import UUID
 
 from pydantic import Field as PydanticField
@@ -279,6 +289,7 @@ def _build_table(
 _BUILDING: set[str] = set()
 
 
+@dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
 class SQLDataclassMeta(type):
     """Metaclass that transforms a class into a pydantic dataclass with an optional SA table."""
 
@@ -451,3 +462,34 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
     """
 
     metadata: ClassVar[MetaData]
+
+    if TYPE_CHECKING:
+        # These attributes/methods are dynamically attached by the metaclass
+        # when table=True. Declared here so type checkers can see them.
+        __table__: ClassVar[Table]
+        __tablename__: ClassVar[str]
+        __sqldataclass_is_table__: ClassVar[bool]
+        c: ClassVar[Any]
+
+        @classmethod
+        def select(cls) -> Any: ...
+
+        @classmethod
+        def load_all(
+            cls,
+            conn: Connection,
+            where: Any = None,
+            order_by: Any = None,
+        ) -> list[Self]: ...
+
+        @classmethod
+        def load_one(cls, conn: Connection, where: Any = None) -> Self | None: ...
+
+        @classmethod
+        def insert_many(cls, conn: Connection, objects: Sequence[Self]) -> None: ...
+
+        def insert(self, conn: Connection) -> None: ...
+
+        def upsert(self, conn: Connection, *, index_elements: list[str]) -> None: ...
+
+        def to_dict(self, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]: ...
