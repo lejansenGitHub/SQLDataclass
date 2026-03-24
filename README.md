@@ -120,6 +120,31 @@ with engine.begin() as conn:
     # both commit together, or both rollback on error
 ```
 
+### Working with existing databases
+
+If your tables already exist (managed by Alembic, a DBA, or another service), skip `metadata.create_all()` — just define models that match the existing schema:
+
+```python
+from sqldataclass import SQLDataclass, Field
+
+# Match your existing table and column names exactly
+class User(SQLDataclass, table=True):
+    __tablename__ = "users"          # must match the existing table name
+    id: int = Field(primary_key=True)
+    email: str
+    name: str
+    is_active: bool = True
+
+engine = create_engine("postgresql+psycopg2://user:pass@host/mydb")
+SQLDataclass.bind(engine)
+
+# No create_all() needed — read and write directly
+users = User.load_all(where=User.c.is_active == True)
+User.update({"is_active": False}, where=User.c.id == 42)
+```
+
+You don't need to define every column — only the ones you read or write. Columns not in your model are simply ignored.
+
 ## Relationships
 
 SQLDataclass supports all common relationship patterns, loaded eagerly via SQLAlchemy Core — no ORM session required.
