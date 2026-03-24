@@ -1,8 +1,9 @@
 """Tests for SQLDataclass.bind(engine) — conn-free usage."""
 
+from typing import Any
+
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
 
 import sqldataclass.model as _model
 from sqldataclass import Field, Relationship, SQLDataclass, insert_row
@@ -33,12 +34,12 @@ class BindHero(SQLDataclass, table=True):
 
 
 @pytest.fixture
-def bound_engine() -> Engine:
+def bound_engine() -> Any:
     """Create a fresh SQLite engine, bind it, and unbind after the test."""
     engine = create_engine("sqlite:///:memory:")
     SQLDataclass.metadata.create_all(engine)
     SQLDataclass.bind(engine)
-    yield engine  # type: ignore[misc]
+    yield engine
     _model._BOUND_ENGINE = None
 
 
@@ -48,14 +49,14 @@ def bound_engine() -> Engine:
 
 
 class TestInsertWithoutConn:
-    def test_insert_instance(self, bound_engine: Engine) -> None:
+    def test_insert_instance(self, bound_engine: Any) -> None:
         hero = BindHero(name="Spider-Man")
         hero.insert()
         loaded = BindHero.load_all()
         assert len(loaded) == 1
         assert loaded[0].name == "Spider-Man"
 
-    def test_insert_many_without_conn(self, bound_engine: Engine) -> None:
+    def test_insert_many_without_conn(self, bound_engine: Any) -> None:
         BindHero.insert_many(objects=[
             BindHero(name="Iron Man"),
             BindHero(name="Thor"),
@@ -70,30 +71,30 @@ class TestInsertWithoutConn:
 
 
 class TestQueryWithoutConn:
-    def test_load_all_no_conn(self, bound_engine: Engine) -> None:
+    def test_load_all_no_conn(self, bound_engine: Any) -> None:
         BindHero(name="A").insert()
         BindHero(name="B").insert()
         heroes = BindHero.load_all()
         assert len(heroes) == 2
 
-    def test_load_all_with_where(self, bound_engine: Engine) -> None:
+    def test_load_all_with_where(self, bound_engine: Any) -> None:
         BindHero(name="Young").insert()
         BindHero(name="Old").insert()
         result = BindHero.load_all(where=BindHero.c.name == "Old")
         assert len(result) == 1
         assert result[0].name == "Old"
 
-    def test_load_one_no_conn(self, bound_engine: Engine) -> None:
+    def test_load_one_no_conn(self, bound_engine: Any) -> None:
         BindHero(name="Spider-Man").insert()
         hero = BindHero.load_one(where=BindHero.c.name == "Spider-Man")
         assert hero is not None
         assert hero.name == "Spider-Man"
 
-    def test_load_one_returns_none(self, bound_engine: Engine) -> None:
+    def test_load_one_returns_none(self, bound_engine: Any) -> None:
         result = BindHero.load_one(where=BindHero.c.name == "Nobody")
         assert result is None
 
-    def test_load_all_empty(self, bound_engine: Engine) -> None:
+    def test_load_all_empty(self, bound_engine: Any) -> None:
         heroes = BindHero.load_all()
         assert heroes == []
 
@@ -104,7 +105,7 @@ class TestQueryWithoutConn:
 
 
 class TestRelationshipsWithoutConn:
-    def test_many_to_one_auto_hydrated(self, bound_engine: Engine) -> None:
+    def test_many_to_one_auto_hydrated(self, bound_engine: Any) -> None:
         with bound_engine.begin() as conn:
             insert_row(conn, BindTeam, {"id": 1, "name": "Avengers"})
             insert_row(conn, BindHero, {"id": 1, "name": "Iron Man", "team_id": 1})
@@ -114,7 +115,7 @@ class TestRelationshipsWithoutConn:
         assert hero.team is not None
         assert hero.team.name == "Avengers"
 
-    def test_one_to_many_auto_populated(self, bound_engine: Engine) -> None:
+    def test_one_to_many_auto_populated(self, bound_engine: Any) -> None:
         with bound_engine.begin() as conn:
             insert_row(conn, BindTeam, {"id": 1, "name": "Avengers"})
             insert_row(conn, BindHero, {"id": 1, "name": "Iron Man", "team_id": 1})
@@ -133,7 +134,7 @@ class TestRelationshipsWithoutConn:
 
 
 class TestExplicitConnStillWorks:
-    def test_explicit_conn_overrides_bind(self, bound_engine: Engine) -> None:
+    def test_explicit_conn_overrides_bind(self, bound_engine: Any) -> None:
         BindHero(name="Hero1").insert()
         with bound_engine.connect() as conn:
             heroes = BindHero.load_all(conn)

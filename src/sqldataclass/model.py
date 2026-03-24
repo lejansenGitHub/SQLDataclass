@@ -444,7 +444,9 @@ def _resolve_relationships(
             continue
 
         rel_info = _get_rel_info(default_val)  # type: ignore[arg-type]
-        assert rel_info is not None
+        if rel_info is None:
+            msg = f"Field {field_name!r} is marked as a relationship but has no RelationshipInfo metadata"
+            raise TypeError(msg)
 
         inner, is_optional = _unwrap_optional(type_hint)
 
