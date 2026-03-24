@@ -1,3 +1,5 @@
+.DS_Store
+supervisord.pid
 __pycache__/
 *.py[cod]
 *.egg-info/
