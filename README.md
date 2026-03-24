@@ -276,6 +276,7 @@ class User(SQLDataclass, table=True):
 | `back_populates` | `str` | Inverse field name on the child model |
 | `link_model` | `type` | Link table class for many-to-many |
 | `discriminator` | `str` | Column name for discriminated unions |
+| `order_by` | `str` | Column name to sort collection children by |
 | `default` | `Any` | Default value (`None` for many-to-one, `[]` for collections) |
 
 ## API reference
@@ -333,7 +334,7 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | ~~No `update()` or `delete()` methods~~ | **Fixed in v0.0.6** |
 | ~~No pagination in `load_all`~~ | **Fixed in v0.0.7** — `Hero.load_all(limit=10, offset=20)` |
 | **No nested relationship loading** — `hero.team.league` won't auto-load `league` | Load each level separately, or build a custom joined query |
-| **No relationship ordering** — collection children are returned in DB order | Sort in application code or add `ORDER BY` via custom query |
+| ~~No relationship ordering~~ | **Fixed in v0.0.8** — `Relationship(order_by="name")` |
 | **No single-table or joined-table inheritance** | Use discriminated unions with `Relationship(discriminator=...)` |
 | **Composite PKs don't work with collection relationships** | Use single-column PKs on models with `list[...]` relationships |
 | **No identity map** — loading the same row twice creates two separate objects | Acceptable for immutable dataclass pattern; cache at application level if needed |

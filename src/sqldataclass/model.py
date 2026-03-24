@@ -192,6 +192,7 @@ class RelationshipInfo:
     discriminator: str | None = None
     back_populates: str | None = None
     link_model: Any = None
+    order_by: str | None = None
 
 
 def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
@@ -297,6 +298,7 @@ def Relationship(
     back_populates: str | None = None,
     link_model: Any = None,
     discriminator: str | None = None,
+    order_by: str | None = None,
 ) -> Any:
     """Mark a field as a relationship — not stored as a database column.
 
@@ -315,11 +317,16 @@ def Relationship(
     Discriminated union::
 
         data: NormalData | BatteryData = Relationship(discriminator="behavior")
+
+    Ordered collection::
+
+        heroes: list[Hero] = Relationship(back_populates="team", order_by="name")
     """
     rel_info = RelationshipInfo(
         discriminator=discriminator,
         back_populates=back_populates,
         link_model=link_model,
+        order_by=order_by,
     )
 
     pydantic_kwargs: dict[str, Any] = {}
@@ -435,6 +442,7 @@ class _ResolvedRelationship:
     kind: str  # "many_to_one", "one_to_many", "many_to_many", "discriminated"
     back_populates: str | None = None
     link_model: Any = None
+    order_by: str | None = None
 
 
 def _resolve_relationships(
@@ -479,6 +487,7 @@ def _resolve_relationships(
             kind=kind,
             back_populates=rel_info.back_populates,
             link_model=rel_info.link_model,
+            order_by=rel_info.order_by,
         )
     return rels
 
@@ -685,9 +694,14 @@ def _populate_collections(
             continue
 
         if rel.kind == "one_to_many":
-            _load_one_to_many(conn, field_name, child_type, parent_table, parent_pks, pk_to_parents)
+            _load_one_to_many(
+                conn, field_name, child_type, parent_table, parent_pks, pk_to_parents, order_by=rel.order_by,
+            )
         elif rel.kind == "many_to_many" and rel.link_model is not None:
-            _load_many_to_many(conn, field_name, child_type, rel.link_model, parent_table, parent_pks, pk_to_parents)
+            _load_many_to_many(
+                conn, field_name, child_type, rel.link_model, parent_table, parent_pks, pk_to_parents,
+                order_by=rel.order_by,
+            )
 
 
 def _load_one_to_many(  # noqa: PLR0913
@@ -697,6 +711,7 @@ def _load_one_to_many(  # noqa: PLR0913
     parent_table: Table,
     parent_pks: list[Any],
     pk_to_parents: dict[Any, list[Any]],
+    order_by: str | None = None,
 ) -> None:
     """Load children for a one-to-many relationship."""
     child_table: Table = child_type.__table__
@@ -705,6 +720,8 @@ def _load_one_to_many(  # noqa: PLR0913
         return
 
     query = sa_select(child_table).where(fk_col.in_(parent_pks))
+    if order_by is not None and order_by in child_table.c:
+        query = query.order_by(child_table.c[order_by])
     children_by_fk: dict[Any, list[Any]] = {}
     for row in conn.execute(query).mappings():
         child = child_type(**row)
@@ -725,6 +742,7 @@ def _load_many_to_many(  # noqa: PLR0913
     parent_table: Table,
     parent_pks: list[Any],
     pk_to_parents: dict[Any, list[Any]],
+    order_by: str | None = None,
 ) -> None:
     """Load targets for a many-to-many relationship via a link table."""
     if not hasattr(link_model, "__table__") or not hasattr(target_type, "__table__"):
@@ -755,6 +773,8 @@ def _load_many_to_many(  # noqa: PLR0913
         .select_from(link_table.join(target_table, target_fk_col == target_pk))
         .where(source_fk_col.in_(parent_pks))
     )
+    if order_by is not None and order_by in target_table.c:
+        query = query.order_by(target_table.c[order_by])
 
     targets_by_source: dict[Any, list[Any]] = {}
     for row in conn.execute(query).mappings():

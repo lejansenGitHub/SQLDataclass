@@ -2,6 +2,18 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.0.8] - 2026-03-24
+
+### Added
+- `order_by` parameter on `Relationship()` for sorted collections
+  ```python
+  heroes: list[Hero] = Relationship(back_populates="team", order_by="name")
+  ```
+- Works with both one-to-many and many-to-many relationships
+
+### Fixed
+- Removed "No relationship ordering" from known limitations
+
 ## [0.0.7] - 2026-03-24
 
 ### Added
