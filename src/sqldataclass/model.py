@@ -72,7 +72,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import Uuid as SAUuid
 from sqlalchemy import select as sa_select
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.types import TypeEngine
 
 from sqldataclass.query import fetch_one as _fetch_one
@@ -872,6 +872,25 @@ def _build_sqldataclass(
 
 
 # ---------------------------------------------------------------------------
+# Engine binding
+# ---------------------------------------------------------------------------
+
+_BOUND_ENGINE: Engine | None = None
+
+
+def _get_engine(cls: Any) -> Engine:
+    """Get the bound engine, or raise if not bound."""
+    engine = getattr(cls, "__sqldataclass_engine__", None) or _BOUND_ENGINE
+    if engine is None:
+        msg = (
+            "No connection provided and no engine bound. "
+            "Either pass conn= or call SQLDataclass.bind(engine) first."
+        )
+        raise RuntimeError(msg)
+    return engine
+
+
+# ---------------------------------------------------------------------------
 # Convenience methods (attached to table classes)
 # ---------------------------------------------------------------------------
 
@@ -885,22 +904,23 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
 
     def _model_load_all(
         klass: Any,
-        conn: Connection,
+        conn: Connection | None = None,
         where: Any = None,
         order_by: Any = None,
     ) -> list[Any]:
         """Load all matching rows as instances of this class.
 
-        Scalar relationships (many-to-one, discriminated) are loaded via JOINs.
-        Collection relationships (one-to-many, many-to-many) are loaded via
-        separate queries (two-query strategy, no N+1).
+        If *conn* is ``None``, auto-creates a connection from the bound engine.
         """
+        if conn is None:
+            with _get_engine(klass).connect() as auto_conn:
+                return _model_load_all(klass, auto_conn, where=where, order_by=order_by)
+
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
         if _has_join_relationships(rels):
             query = _build_joined_query(klass, where=where, order_by=order_by)
             results = [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
         elif rels:
-            # Has only collection relationships, no JOINs needed for parent
             query = sa_select(klass.__table__)
             if where is not None:
                 query = query.where(where)
@@ -915,12 +935,15 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
                 query = query.order_by(order_by)
             return _load_all(conn, query, klass)
 
-        # Populate collection relationships (one-to-many, many-to-many)
         _populate_collections(klass, results, conn)
         return results
 
-    def _model_load_one(klass: Any, conn: Connection, where: Any = None) -> Any | None:
+    def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:
         """Load a single row, or ``None`` if not found."""
+        if conn is None:
+            with _get_engine(klass).connect() as auto_conn:
+                return _model_load_one(klass, auto_conn, where=where)
+
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
         if _has_join_relationships(rels):
             query = _build_joined_query(klass, where=where)
@@ -948,20 +971,34 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
         _populate_collections(klass, [result], conn)
         return result
 
-    def _model_insert_many(klass: Any, conn: Connection, objects: Sequence[Any]) -> None:
+    def _model_insert_many(klass: Any, conn: Connection | None = None, objects: Sequence[Any] | None = None) -> None:
         """Bulk-insert multiple instances."""
+        if objects is None:
+            objects = []
         if not objects:
             return
+        if conn is None:
+            with _get_engine(klass).begin() as auto_conn:
+                _model_insert_many(klass, auto_conn, objects=objects)
+                return
         rows = [_flatten_for_table(obj) for obj in objects]
         _insert_many(conn, klass, rows)
 
-    def _model_insert(self: Any, conn: Connection) -> None:
+    def _model_insert(self: Any, conn: Connection | None = None) -> None:
         """Insert this instance into the database."""
+        if conn is None:
+            with _get_engine(type(self)).begin() as auto_conn:
+                _model_insert(self, auto_conn)
+                return
         flat = _flatten_for_table(self)
         _insert_row(conn, type(self), flat)
 
-    def _model_upsert(self: Any, conn: Connection, *, index_elements: list[str]) -> None:
+    def _model_upsert(self: Any, conn: Connection | None = None, *, index_elements: list[str]) -> None:
         """Upsert (PostgreSQL ON CONFLICT) this instance."""
+        if conn is None:
+            with _get_engine(type(self)).begin() as auto_conn:
+                _model_upsert(self, auto_conn, index_elements=index_elements)
+                return
         flat = _flatten_for_table(self)
         _upsert_row(conn, type(self), flat, index_elements=index_elements)
 
@@ -1006,6 +1043,22 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
 
     metadata: ClassVar[MetaData]
 
+    @classmethod
+    def bind(cls, engine: Engine) -> None:
+        """Bind an engine so ``conn`` becomes optional on all methods.
+
+        Call once at startup::
+
+            SQLDataclass.bind(engine)
+
+        Then use without passing conn::
+
+            heroes = Hero.load_all()
+            hero.insert()
+        """
+        global _BOUND_ENGINE  # noqa: PLW0603
+        _BOUND_ENGINE = engine
+
     if TYPE_CHECKING:
         __table__: ClassVar[Table]
         __tablename__: ClassVar[str]
@@ -1019,19 +1072,19 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         @classmethod
         def load_all(
             cls,
-            conn: Connection,
+            conn: Connection | None = None,
             where: Any = None,
             order_by: Any = None,
         ) -> list[Self]: ...
 
         @classmethod
-        def load_one(cls, conn: Connection, where: Any = None) -> Self | None: ...
+        def load_one(cls, conn: Connection | None = None, where: Any = None) -> Self | None: ...
 
         @classmethod
-        def insert_many(cls, conn: Connection, objects: Sequence[Self]) -> None: ...
+        def insert_many(cls, conn: Connection | None = None, objects: Sequence[Self] | None = None) -> None: ...
 
-        def insert(self, conn: Connection) -> None: ...
+        def insert(self, conn: Connection | None = None) -> None: ...
 
-        def upsert(self, conn: Connection, *, index_elements: list[str]) -> None: ...
+        def upsert(self, conn: Connection | None = None, *, index_elements: list[str]) -> None: ...
 
         def to_dict(self, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]: ...
