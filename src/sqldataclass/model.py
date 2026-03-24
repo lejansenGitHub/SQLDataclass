@@ -71,7 +71,13 @@ from sqlalchemy import (
     Time,
 )
 from sqlalchemy import Uuid as SAUuid
+from sqlalchemy import (
+    delete as sa_delete,
+)
 from sqlalchemy import select as sa_select
+from sqlalchemy import (
+    update as sa_update,
+)
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.types import TypeEngine
 
@@ -1004,6 +1010,28 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
         flat = _flatten_for_table(self)
         _upsert_row(conn, type(self), flat, index_elements=index_elements)
 
+    def _model_update(klass: Any, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int:
+        """Update rows matching *where* with *values*. Returns number of rows updated."""
+        if conn is None:
+            with _get_engine(klass).begin() as auto_conn:
+                return _model_update(klass, values, auto_conn, where=where)
+        stmt = sa_update(klass.__table__).values(values)
+        if where is not None:
+            stmt = stmt.where(where)
+        result = conn.execute(stmt)
+        return result.rowcount
+
+    def _model_delete(klass: Any, conn: Connection | None = None, where: Any = None) -> int:
+        """Delete rows matching *where*. Returns number of rows deleted."""
+        if conn is None:
+            with _get_engine(klass).begin() as auto_conn:
+                return _model_delete(klass, auto_conn, where=where)
+        stmt = sa_delete(klass.__table__)
+        if where is not None:
+            stmt = stmt.where(where)
+        result = conn.execute(stmt)
+        return result.rowcount
+
     def _model_to_dict(self: Any, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]:
         """Convert to a flat dict suitable for SQL insertion."""
         return _flatten_for_table(self, exclude_keys=exclude_keys)
@@ -1012,6 +1040,8 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
     cls.load_all = classmethod(_model_load_all)
     cls.load_one = classmethod(_model_load_one)
     cls.insert_many = classmethod(_model_insert_many)
+    cls.update = classmethod(_model_update)
+    cls.delete = classmethod(_model_delete)
     cls.insert = _model_insert
     cls.upsert = _model_upsert
     cls.to_dict = _model_to_dict
@@ -1084,6 +1114,12 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
 
         @classmethod
         def insert_many(cls, conn: Connection | None = None, objects: Sequence[Self] | None = None) -> None: ...
+
+        @classmethod
+        def update(cls, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int: ...
+
+        @classmethod
+        def delete(cls, conn: Connection | None = None, where: Any = None) -> int: ...
 
         def insert(self, conn: Connection | None = None) -> None: ...
 

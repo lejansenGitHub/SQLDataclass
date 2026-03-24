@@ -2,6 +2,16 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.0.6] - 2026-03-24
+
+### Added
+- `Model.update(values, conn=, where=)` — update matching rows, returns row count
+- `Model.delete(conn=, where=)` — delete matching rows, returns row count
+- Both support `bind()` (conn optional) and explicit connection
+
+### Fixed
+- Removed "No update/delete methods" from known limitations
+
 ## [0.0.5] - 2026-03-24
 
 ### Added

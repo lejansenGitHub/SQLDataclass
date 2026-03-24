@@ -291,6 +291,8 @@ All methods accept an optional `conn` parameter. If omitted, a connection is aut
 | `Model.load_all(conn=, where=, order_by=)` | classmethod | Load all matching rows with relationships |
 | `Model.load_one(conn=, where=)` | classmethod | Load one row or `None` |
 | `Model.insert_many(conn=, objects=)` | classmethod | Bulk insert |
+| `Model.update(values, conn=, where=)` | classmethod | Update matching rows, returns count |
+| `Model.delete(conn=, where=)` | classmethod | Delete matching rows, returns count |
 | `instance.insert(conn=)` | instance | Insert this row |
 | `instance.to_dict(exclude_keys=)` | instance | Flat dict for SQL |
 | `instance.upsert(conn=, index_elements=)` | instance | PostgreSQL upsert |
@@ -328,7 +330,7 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | Limitation | Workaround |
 |---|---|
 | **No lazy loading** — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
-| **No `update()` or `delete()` methods** | Use SQLAlchemy Core directly: `conn.execute(table.update().where(...).values(...))` |
+| ~~No `update()` or `delete()` methods~~ | **Fixed in v0.0.6** |
 | **No pagination** (`LIMIT`/`OFFSET`) in `load_all` | Build custom queries: `Hero.select().limit(10).offset(20)` with `load_all(conn, query)` |
 | **No nested relationship loading** — `hero.team.league` won't auto-load `league` | Load each level separately, or build a custom joined query |
 | **No relationship ordering** — collection children are returned in DB order | Sort in application code or add `ORDER BY` via custom query |
