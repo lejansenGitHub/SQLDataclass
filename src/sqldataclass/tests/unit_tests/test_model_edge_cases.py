@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import LargeBinary, String, Time
 
 from sqldataclass import Field, Relationship, SQLDataclass
-from sqldataclass.model import _default_tablename, _get_pk_column, _python_type_to_sa
+from sqldataclass.model import _default_tablename, _get_pk_columns, _python_type_to_sa
 from sqldataclass.write import flatten_for_table
 
 # ---------------------------------------------------------------------------
@@ -202,16 +202,17 @@ class TestDefaultTablenameEdgeCases:
 
 
 class TestCompositePKError:
-    """Test that composite PKs raise TypeError for collection relationships."""
+    """Test that composite PKs work with _get_pk_columns."""
 
-    def test_composite_pk_raises_for_get_pk_column(self) -> None:
+    def test_composite_pk_returns_multiple_columns(self) -> None:
         class CompositePK(SQLDataclass, table=True):
             __tablename__ = "composite_pk_model"
             a: int = Field(default=0, primary_key=True)
             b: int = Field(default=0, primary_key=True)
 
-        with pytest.raises(TypeError, match="single-column PK"):
-            _get_pk_column(CompositePK)
+        pk_cols = _get_pk_columns(CompositePK)
+        assert len(pk_cols) == 2
+        assert {c.name for c in pk_cols} == {"a", "b"}
 
 
 # ---------------------------------------------------------------------------

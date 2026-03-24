@@ -430,16 +430,16 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 
 | Limitation | Workaround |
 |---|---|
-| **No lazy loading** — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
+| **No lazy loading** (by design) — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
 | ~~No `update()` or `delete()` methods~~ | **Fixed in v0.0.6** |
 | ~~No pagination in `load_all`~~ | **Fixed in v0.0.7** — `Hero.load_all(limit=10, offset=20)` |
-| **No nested relationship loading** — `hero.team.league` won't auto-load `league` | Load each level separately, or build a custom joined query |
+| ~~No nested relationship loading~~ | **Fixed in v0.1.0** — `hero.team.league` auto-loads recursively |
 | ~~No relationship ordering~~ | **Fixed in v0.0.8** — `Relationship(order_by="name")` |
-| **No single-table or joined-table inheritance** | Use discriminated unions with `Relationship(discriminator=...)` |
-| **Composite PKs don't work with collection relationships** | Use single-column PKs on models with `list[...]` relationships |
-| **No identity map** — loading the same row twice creates two separate objects | Acceptable for immutable dataclass pattern; cache at application level if needed |
+| **No single-table or joined-table inheritance** (by design) | Use discriminated unions with `Relationship(discriminator=...)` |
+| ~~Composite PKs don't work with collection relationships~~ | **Fixed in v0.1.0** |
+| **No identity map** (by design) — loading the same row twice creates separate objects | Immutable dataclass pattern; cache at application level if needed |
 | ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |
-| **Eager-only collections** — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
+| **Eager-only collections** (by design) — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
 
 ## Requirements
 

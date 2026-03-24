@@ -2,6 +2,26 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.1.0] - 2026-03-24
+
+### Added
+- **Nested relationship loading** — relationships on related objects are
+  recursively populated (up to depth 5 to prevent infinite loops)
+  ```python
+  # League → teams → heroes (3 levels deep, auto-loaded)
+  league = League.load_one(where=League.c.name == "Marvel")
+  league.teams[0].heroes[0].name  # works!
+
+  # Hero → team → league (many-to-one chain, auto-loaded)
+  hero = Hero.load_one(where=Hero.c.name == "Iron Man")
+  hero.team.league.name  # "Marvel"
+  ```
+- Scalar relationships on JOINed objects are auto-populated via batch queries
+- Circular relationship protection with max recursion depth
+
+### Fixed
+- Removed "No nested relationship loading" from known limitations
+
 ## [0.0.9] - 2026-03-24
 
 ### Added

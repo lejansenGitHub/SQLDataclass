@@ -621,14 +621,16 @@ def _hydrate_row(cls: Any, row: Any) -> Any:
 _MODEL_REGISTRY: dict[str, Any] = {}
 
 
-def _get_pk_column(cls: Any) -> Column[Any]:
-    """Get the single primary key column for a table model."""
-    pk_cols = list(cls.__table__.primary_key.columns)
-    if len(pk_cols) != 1:
-        msg = f"Collection relationships require a single-column PK, got {len(pk_cols)} on {cls}"
-        raise TypeError(msg)
-    result: Column[Any] = pk_cols[0]
-    return result
+def _get_pk_columns(cls: Any) -> list[Column[Any]]:
+    """Get the primary key column(s) for a table model."""
+    return list(cls.__table__.primary_key.columns)
+
+
+def _get_pk_value(obj: Any, pk_names: list[str]) -> Any:
+    """Get PK value as a scalar (single PK) or tuple (composite PK)."""
+    if len(pk_names) == 1:
+        return getattr(obj, pk_names[0])
+    return tuple(getattr(obj, name) for name in pk_names)
 
 
 def _find_fk_column(child_table: Table, parent_table: Table) -> Column[Any] | None:
@@ -668,24 +670,34 @@ def _populate_collections(
     cls: Any,
     parents: list[Any],
     conn: Connection,
+    *,
+    _depth: int = 0,
 ) -> None:
     """Load one-to-many and many-to-many children and attach to parent instances.
 
     Uses a two-query strategy: one query per collection relationship that loads
     ALL children for ALL parents at once (no N+1).
+
+    After loading children, recursively populates their relationships too
+    (nested relationship loading), up to a max depth to prevent infinite loops.
     """
+    if _depth > 5:  # prevent infinite recursion on circular relationships
+        return
+
     relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
     collection_rels = {k: v for k, v in relationships.items() if v.kind in ("one_to_many", "many_to_many")}
     if not collection_rels or not parents:
         return
 
     parent_table: Table = cls.__table__
-    pk_col = _get_pk_column(cls)
-    pk_name = pk_col.name
-    parent_pks = [getattr(p, pk_name) for p in parents]
+    pk_cols = _get_pk_columns(cls)
+    pk_names = [c.name for c in pk_cols]
+    parent_pks = [_get_pk_value(p, pk_names) for p in parents]
     pk_to_parents: dict[Any, list[Any]] = {}
     for p in parents:
-        pk_to_parents.setdefault(getattr(p, pk_name), []).append(p)
+        pk_to_parents.setdefault(_get_pk_value(p, pk_names), []).append(p)
+
+    all_loaded_children: list[Any] = []
 
     for field_name, rel in collection_rels.items():
         _ensure_resolved(rel)
@@ -702,6 +714,142 @@ def _populate_collections(
                 conn, field_name, child_type, rel.link_model, parent_table, parent_pks, pk_to_parents,
                 order_by=rel.order_by,
             )
+
+        # Collect all loaded children for recursive population
+        for parent in parents:
+            children = getattr(parent, field_name, None)
+            if isinstance(children, list):
+                all_loaded_children.extend(children)
+
+    # Recursively populate nested relationships on loaded children
+    if all_loaded_children:
+        _populate_nested(all_loaded_children, conn, _depth=_depth + 1)
+
+
+def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection) -> None:  # noqa: PLR0912
+    """For objects whose scalar (many-to-one) rels are None, load them via query."""
+    rels: dict[str, _ResolvedRelationship] = getattr(cls, "__relationships__", {})
+    if not hasattr(cls, "__table__"):
+        return
+
+    for rel in rels.values():
+        if rel.kind != "many_to_one":
+            continue
+        _ensure_resolved(rel)
+        target_type = rel.target_types[0]
+        if not hasattr(target_type, "__table__"):
+            continue
+
+        # Find FK column name on cls that references target
+        fk_field: str | None = None
+        for col in cls.__table__.columns:
+            for fk in col.foreign_keys:
+                if fk.column.table is target_type.__table__:
+                    fk_field = col.name
+                    break
+            if fk_field:
+                break
+        if fk_field is None:
+            continue
+
+        # Collect FK values for objects where this relationship is None
+        fk_values: list[Any] = []
+        for obj in objects:
+            if getattr(obj, rel.field_name, None) is None:
+                fk_val = getattr(obj, fk_field, None)
+                if fk_val is not None:
+                    fk_values.append(fk_val)
+
+        if not fk_values:
+            continue
+
+        # Load target objects in batch
+        target_table: Table = target_type.__table__
+        target_pk = list(target_table.primary_key.columns)[0]
+        query = sa_select(target_table).where(target_pk.in_(fk_values))
+        targets_by_pk: dict[Any, Any] = {}
+        for row in conn.execute(query).mappings():
+            target = target_type(**row)
+            targets_by_pk[row[target_pk.name]] = target
+
+        # Assign to objects
+        for obj in objects:
+            if getattr(obj, rel.field_name, None) is None:
+                fk_val = getattr(obj, fk_field, None)
+                if fk_val in targets_by_pk:
+                    object.__setattr__(obj, rel.field_name, targets_by_pk[fk_val])
+
+
+def _populate_nested(objects: list[Any], conn: Connection, *, _depth: int) -> None:  # noqa: PLR0912
+    """Recursively populate relationships on loaded objects.
+
+    For scalar (many-to-one) relationships that were loaded via JOIN but whose
+    own relationships are still None, re-load them from DB with full hydration.
+    """
+    if _depth > 5:
+        return
+
+    # Group objects by type to batch-load their children
+    by_type: dict[type, list[Any]] = {}
+    for obj in objects:
+        cls = type(obj)
+        rels: dict[str, _ResolvedRelationship] = getattr(cls, "__relationships__", {})
+        if not rels:
+            continue
+        by_type.setdefault(cls, []).append(obj)
+
+    for cls, instances in by_type.items():
+        rels = getattr(cls, "__relationships__", {})
+        has_collections = any(r.kind in ("one_to_many", "many_to_many") for r in rels.values())
+        if has_collections:
+            _populate_collections(cls, instances, conn, _depth=_depth + 1)
+
+        # For scalar relationships (many-to-one): the nested object may have been
+        # hydrated from a JOIN but its OWN relationships are still None.
+        # Re-load the scalar relationship targets if they have unfilled rels.
+        for rel in rels.values():
+            if rel.kind == "many_to_one":
+                _ensure_resolved(rel)
+                target_type = rel.target_types[0]
+                target_rels: dict[str, _ResolvedRelationship] = getattr(target_type, "__relationships__", {})
+                if not target_rels:
+                    continue
+
+                # Check if any instance's nested object has unfilled relationships
+                needs_reload = False
+                for inst in instances:
+                    nested = getattr(inst, rel.field_name, None)
+                    if nested is not None:
+                        for trel in target_rels.values():
+                            if getattr(nested, trel.field_name, None) is None and trel.kind != "many_to_one":
+                                needs_reload = True
+                                break
+                            if getattr(nested, trel.field_name, None) is None and trel.kind == "many_to_one":
+                                needs_reload = True
+                                break
+                    if needs_reload:
+                        break
+
+                if needs_reload and hasattr(target_type, "__table__"):
+                    # Collect the nested objects and populate their relationships
+                    nested_objs = [
+                        getattr(inst, rel.field_name)
+                        for inst in instances
+                        if getattr(inst, rel.field_name) is not None
+                    ]
+                    if nested_objs:
+                        # Re-load each nested object's scalar relationships via query
+                        _reload_scalar_relationships(nested_objs, target_type, conn)
+                        _populate_nested(nested_objs, conn, _depth=_depth + 1)
+            elif rel.kind in ("one_to_many", "many_to_many"):
+                # Collect children from already-populated collections
+                all_children: list[Any] = []
+                for inst in instances:
+                    children = getattr(inst, rel.field_name, None)
+                    if isinstance(children, list):
+                        all_children.extend(children)
+                if all_children:
+                    _populate_nested(all_children, conn, _depth=_depth + 1)
 
 
 def _load_one_to_many(  # noqa: PLR0913
@@ -975,6 +1123,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             return _load_all(conn, query, klass)
 
         _populate_collections(klass, results, conn)
+        _populate_nested(results, conn, _depth=0)
         return results
 
     def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:
@@ -1008,6 +1157,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             return klass(**flat_row)
 
         _populate_collections(klass, [result], conn)
+        _populate_nested([result], conn, _depth=0)
         return result
 
     def _model_insert_many(klass: Any, conn: Connection | None = None, objects: Sequence[Any] | None = None) -> None:
