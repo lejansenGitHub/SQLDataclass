@@ -7,7 +7,7 @@ from sqldataclass.hydration import (
     format_discriminated,
     nest_fields,
 )
-from sqldataclass.model import Field, SQLDataclass
+from sqldataclass.model import Field, Relationship, SQLDataclass
 from sqldataclass.query import fetch_all, fetch_one, load_all, select_columns
 from sqldataclass.registry import (
     Base,
@@ -25,6 +25,7 @@ from sqldataclass.write import (
 __all__ = [
     "Base",
     "Field",
+    "Relationship",
     "SQLDataclass",
     "create_all_tables",
     "discriminator_map",

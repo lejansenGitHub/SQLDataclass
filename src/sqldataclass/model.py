@@ -9,6 +9,26 @@ Usage::
         name: str
         secret_name: str
         age: int | None = None
+
+Relationships::
+
+    class Team(SQLDataclass, table=True):
+        id: int | None = Field(default=None, primary_key=True)
+        name: str
+
+    class Hero(SQLDataclass, table=True):
+        id: int | None = Field(default=None, primary_key=True)
+        name: str
+        team_id: int = Field(foreign_key="team.id")
+        team: Team | None = Relationship()
+
+Discriminated unions::
+
+    class Participant(SQLDataclass, table=True):
+        id: int | None = Field(default=None, primary_key=True)
+        name: str
+        behavior: str
+        data: NormalData | BatteryData = Relationship(discriminator="behavior")
 """
 
 from __future__ import annotations
@@ -22,6 +42,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
+    Literal,
     Self,
     Sequence,
     dataclass_transform,
@@ -90,9 +111,22 @@ def _unwrap_optional(tp: Any) -> tuple[Any, bool]:
     return tp, False
 
 
+def _unwrap_union_variants(tp: Any) -> list[Any]:
+    """Return all non-None variants from a union type, or [tp] if not a union."""
+    origin = get_origin(tp)
+    if origin is types.UnionType:
+        return [a for a in get_args(tp) if a is not type(None)]
+    return [tp]
+
+
 def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
     """Map a Python type to a SQLAlchemy column type."""
     inner, _ = _unwrap_optional(tp)
+
+    # Literal["foo", "bar"] → String
+    if get_origin(inner) is Literal:
+        return String
+
     sa_type = _TYPE_MAP.get(inner)
     if sa_type is None:
         raise TypeError(
@@ -100,6 +134,11 @@ def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
             f"Use Field(sa_type=...) to specify explicitly."
         )
     return sa_type
+
+
+def _is_model_type(tp: Any) -> bool:
+    """Check if a type is a SQLDataclass model (has __table__)."""
+    return isinstance(tp, type) and hasattr(tp, "__sqldataclass_is_table__")
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +166,37 @@ def _get_sa_info(field_info: FieldInfo) -> SAColumnInfo | None:
         if isinstance(item, SAColumnInfo):
             return item
     return None
+
+
+# ---------------------------------------------------------------------------
+# Relationship metadata (attached to pydantic FieldInfo)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class RelationshipInfo:
+    """Marks a field as a relationship (not a database column).
+
+    For many-to-one: the FK is inferred from existing Field(foreign_key=...) columns.
+    For discriminated unions: set ``discriminator`` to the column that selects the variant.
+    """
+
+    discriminator: str | None = None
+
+
+def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
+    """Extract ``RelationshipInfo`` from a pydantic ``FieldInfo.metadata`` list."""
+    for item in field_info.metadata:
+        if isinstance(item, RelationshipInfo):
+            return item
+    return None
+
+
+def _is_relationship(default_val: Any) -> bool:
+    """Check if a field default is a Relationship-bearing FieldInfo."""
+    if isinstance(default_val, FieldInfo):
+        return _get_rel_info(default_val) is not None
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +281,37 @@ def Field(  # noqa: PLR0913
     return field_info
 
 
+def Relationship(
+    default: Any = _UNSET,
+    *,
+    discriminator: str | None = None,
+) -> Any:
+    """Mark a field as a relationship — not stored as a database column.
+
+    Many-to-one (auto-detected from FK)::
+
+        team: Team | None = Relationship()
+
+    Discriminated union::
+
+        data: NormalData | BatteryData = Relationship(discriminator="behavior")
+
+    The join condition is inferred from ``Field(foreign_key=...)`` columns.
+    """
+    rel_info = RelationshipInfo(discriminator=discriminator)
+
+    # Default: None for optional many-to-one, required for discriminated unions
+    pydantic_kwargs: dict[str, Any] = {}
+    if default is not _UNSET:
+        pydantic_kwargs["default"] = default
+    elif discriminator is None:
+        pydantic_kwargs["default"] = None
+
+    field_info: Any = PydanticField(**pydantic_kwargs)
+    field_info.metadata.append(rel_info)
+    return field_info
+
+
 # ---------------------------------------------------------------------------
 # Table builder
 # ---------------------------------------------------------------------------
@@ -269,10 +370,17 @@ def _build_table(
     resolved_hints: dict[str, Any],
     namespace: dict[str, Any],
     target_metadata: MetaData,
+    *,
+    relationship_fields: set[str],
 ) -> Table:
-    """Create a SQLAlchemy ``Table`` from resolved type hints and field defaults."""
+    """Create a SQLAlchemy ``Table`` from resolved type hints and field defaults.
+
+    Fields in *relationship_fields* are skipped (they are not database columns).
+    """
     columns: list[Column[Any]] = []
     for field_name, type_hint in resolved_hints.items():
+        if field_name in relationship_fields:
+            continue
         default_val = namespace.get(field_name)
         sa_info: SAColumnInfo | None = None
         if isinstance(default_val, FieldInfo):
@@ -283,13 +391,164 @@ def _build_table(
 
 
 # ---------------------------------------------------------------------------
+# Relationship query builder and hydration
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _ResolvedRelationship:
+    """Fully resolved relationship metadata for query building."""
+
+    field_name: str
+    target_types: list[Any]  # [Team] for many-to-one, [NormalData, BatteryData] for union
+    discriminator: str | None
+    is_optional: bool
+
+
+def _resolve_relationships(
+    cls: Any,
+    annotations: dict[str, Any],
+    namespace: dict[str, Any],
+) -> dict[str, _ResolvedRelationship]:
+    """Build resolved relationship info from annotations and field defaults."""
+    rels: dict[str, _ResolvedRelationship] = {}
+    for field_name, type_hint in annotations.items():
+        default_val = namespace.get(field_name)
+        if not _is_relationship(default_val):
+            continue
+
+        rel_info = _get_rel_info(default_val)  # type: ignore[arg-type]
+        assert rel_info is not None
+
+        inner, is_optional = _unwrap_optional(type_hint)
+        variants = _unwrap_union_variants(inner) if rel_info.discriminator else [inner]
+
+        rels[field_name] = _ResolvedRelationship(
+            field_name=field_name,
+            target_types=variants,
+            discriminator=rel_info.discriminator,
+            is_optional=is_optional or rel_info.discriminator is None,
+        )
+    return rels
+
+
+def _find_fk_join_condition(source_table: Table, target_table: Table) -> Any | None:
+    """Find the join condition from FKs on source that reference target."""
+    for col in source_table.columns:
+        for fk in col.foreign_keys:
+            if fk.column.table is target_table:
+                return col == fk.column
+    # Also check reverse: target FK → source
+    for col in target_table.columns:
+        for fk in col.foreign_keys:
+            if fk.column.table is source_table:
+                return col == fk.column
+    return None
+
+
+def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
+    """Build a SELECT with labeled columns and JOINs for all relationships."""
+    base_table: Table = cls.__table__
+    relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
+
+    # Label base table columns with prefix to avoid name collisions
+    labeled: list[Any] = [c.label(f"__base__{c.name}") for c in base_table.columns]
+
+    # Build join chain and collect labeled columns for each related table
+    base_from: Any = base_table
+    for field_name, rel in relationships.items():
+        for target_type in rel.target_types:
+            if not hasattr(target_type, "__table__"):
+                continue
+            target_table: Table = target_type.__table__
+            prefix = f"__{field_name}__{target_table.name}__"
+            labeled.extend(c.label(f"{prefix}{c.name}") for c in target_table.columns)
+
+            join_cond = _find_fk_join_condition(base_table, target_table)
+            if join_cond is not None:
+                base_from = base_from.outerjoin(target_table, join_cond)
+
+    query = sa_select(*labeled).select_from(base_from)
+
+    if where is not None:
+        query = query.where(where)
+    if order_by is not None:
+        query = query.order_by(order_by)
+    return query
+
+
+def _extract_prefixed(row_dict: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """Extract and strip-prefix entries from a row dict."""
+    return {k.removeprefix(prefix): v for k, v in row_dict.items() if k.startswith(prefix)}
+
+
+def _hydrate_discriminated(
+    row_dict: dict[str, Any],
+    base_data: dict[str, Any],
+    rel: _ResolvedRelationship,
+) -> Any:
+    """Hydrate a discriminated union relationship field."""
+    disc_value = base_data.get(rel.discriminator)  # type: ignore[arg-type]
+    active_type = _find_active_variant(rel.target_types, rel.discriminator, disc_value)  # type: ignore[arg-type]
+    if active_type is None or not hasattr(active_type, "__table__"):
+        return None
+    target_table: Table = active_type.__table__
+    prefix = f"__{rel.field_name}__{target_table.name}__"
+    nested = _extract_prefixed(row_dict, prefix)
+    disc_key: str = rel.discriminator  # type: ignore[assignment]
+    if disc_key not in nested:
+        nested[disc_key] = disc_value
+    return active_type(**nested)
+
+
+def _find_active_variant(variants: list[Any], discriminator: str, disc_value: Any) -> Any:
+    """Find which union variant matches the discriminator value."""
+    for variant in variants:
+        variant_hints = get_type_hints(variant)
+        if discriminator in variant_hints:
+            for lit_val in get_args(variant_hints[discriminator]):
+                if lit_val == disc_value:
+                    return variant
+    return None
+
+
+def _hydrate_many_to_one(row_dict: dict[str, Any], rel: _ResolvedRelationship) -> Any:
+    """Hydrate a simple many-to-one relationship field."""
+    target_type = rel.target_types[0]
+    if not hasattr(target_type, "__table__"):
+        return None
+    target_table: Table = target_type.__table__
+    prefix = f"__{rel.field_name}__{target_table.name}__"
+    nested = _extract_prefixed(row_dict, prefix)
+    if nested and any(v is not None for v in nested.values()):
+        return target_type(**nested)
+    return None
+
+
+def _hydrate_row(cls: Any, row: Any) -> Any:
+    """Hydrate a flat row (with labeled columns) into a nested model instance."""
+    relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
+    row_dict = dict(row)
+
+    base_data = _extract_prefixed(row_dict, "__base__")
+
+    for field_name, rel in relationships.items():
+        if rel.discriminator:
+            base_data[field_name] = _hydrate_discriminated(row_dict, base_data, rel)
+        else:
+            base_data[field_name] = _hydrate_many_to_one(row_dict, rel)
+
+    return cls(**base_data)
+
+
+# ---------------------------------------------------------------------------
 # Metaclass
 # ---------------------------------------------------------------------------
 
 _BUILDING: set[str] = set()
 
 
-@dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
+@dataclass_transform(kw_only_default=True, field_specifiers=(Field, Relationship))
 class SQLDataclassMeta(type):
     """Metaclass that transforms a class into a pydantic dataclass with an optional SA table."""
 
@@ -344,6 +603,14 @@ def _build_sqldataclass(
     tablename = namespace.pop("__tablename__", _default_tablename(name))
     target_metadata = _find_metadata(bases)
 
+    # Detect relationship fields (not columns)
+    relationship_fields: set[str] = set()
+    resolved_rels: dict[str, _ResolvedRelationship] = {}
+    for field_name in annotations:
+        default_val = namespace.get(field_name)
+        if _is_relationship(default_val):
+            relationship_fields.add(field_name)
+
     # Build SA table before pydantic transforms the class
     sa_table: Table | None = None
     if table:
@@ -353,7 +620,13 @@ def _build_sqldataclass(
             resolved = get_type_hints(temp_for_hints)
         except Exception:
             resolved = dict(annotations)
-        sa_table = _build_table(tablename, resolved, namespace, target_metadata)
+
+        sa_table = _build_table(
+            tablename, resolved, namespace, target_metadata, relationship_fields=relationship_fields,
+        )
+
+        # Resolve relationships (needs resolved type hints)
+        resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
     # Create the actual class via the metaclass (keeps SQLDataclass in bases)
     cls: Any = type.__new__(mcs, name, bases, namespace, **kwargs)
@@ -361,8 +634,9 @@ def _build_sqldataclass(
     # Apply pydantic dataclass with slots for memory efficiency
     dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
 
-    # Attach SA table and metadata
+    # Attach SA table, relationships, and metadata
     dc_cls.__sqldataclass_is_table__ = table
+    dc_cls.__relationships__ = resolved_rels
     if sa_table is not None:
         dc_cls.__table__ = sa_table
         dc_cls.__tablename__ = tablename
@@ -393,7 +667,16 @@ def _attach_convenience_methods(cls: Any) -> None:
         where: Any = None,
         order_by: Any = None,
     ) -> list[Any]:
-        """Load all matching rows as instances of this class."""
+        """Load all matching rows as instances of this class.
+
+        If the model has relationships, auto-JOINs related tables and hydrates
+        nested objects.
+        """
+        rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
+        if rels:
+            query = _build_joined_query(klass, where=where, order_by=order_by)
+            return [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
+
         query = sa_select(klass.__table__)
         if where is not None:
             query = query.where(where)
@@ -403,13 +686,21 @@ def _attach_convenience_methods(cls: Any) -> None:
 
     def _model_load_one(klass: Any, conn: Connection, where: Any = None) -> Any | None:
         """Load a single row, or ``None`` if not found."""
+        rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
+        if rels:
+            query = _build_joined_query(klass, where=where)
+            row = conn.execute(query).mappings().one_or_none()
+            if row is None:
+                return None
+            return _hydrate_row(klass, row)
+
         query = sa_select(klass.__table__)
         if where is not None:
             query = query.where(where)
-        row = _fetch_one(conn, query)
-        if row is None:
+        flat_row = _fetch_one(conn, query)
+        if flat_row is None:
             return None
-        return klass(**row)
+        return klass(**flat_row)
 
     def _model_insert_many(klass: Any, conn: Connection, objects: Sequence[Any]) -> None:
         """Bulk-insert multiple instances."""
@@ -459,16 +750,21 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
 
         class HeroCreate(SQLDataclass):
             name: str
+
+    Relationships are declared with ``Relationship()``::
+
+        class Hero(SQLDataclass, table=True):
+            team_id: int = Field(foreign_key="team.id")
+            team: Team | None = Relationship()
     """
 
     metadata: ClassVar[MetaData]
 
     if TYPE_CHECKING:
-        # These attributes/methods are dynamically attached by the metaclass
-        # when table=True. Declared here so type checkers can see them.
         __table__: ClassVar[Table]
         __tablename__: ClassVar[str]
         __sqldataclass_is_table__: ClassVar[bool]
+        __relationships__: ClassVar[dict[str, _ResolvedRelationship]]
         c: ClassVar[Any]
 
         @classmethod

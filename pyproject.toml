@@ -136,6 +136,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["sqldataclass.tests.*"]
 disallow_untyped_decorators = false
+# Relationship() fields have runtime defaults that mypy can't see through dataclass_transform
+disable_error_code = ["call-arg"]
 
 [tool.pytest.ini_options]
 testpaths = ["src"]

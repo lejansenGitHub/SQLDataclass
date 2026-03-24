@@ -61,8 +61,14 @@ def flatten_for_table(
     else:
         raise TypeError(f"Expected a dataclass instance, got {type(domain_object)}")
 
+    # Also exclude relationship fields (they are not database columns)
+    rel_keys: set[str] = set(getattr(type(domain_object), "__relationships__", {}))
+
     return {
         key: value
         for key, value in raw.items()
-        if key not in exclude_keys and not isinstance(value, dict) and not dataclasses.is_dataclass(value)
+        if key not in exclude_keys
+        and key not in rel_keys
+        and not isinstance(value, dict)
+        and not dataclasses.is_dataclass(value)
     }
