@@ -1,6 +1,6 @@
 [project]
 name = "sqldataclass"
-version = "0.0.3"
+version = "0.0.4"
 description = "Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible."
 readme = "README.md"
 license = "MIT"
@@ -136,6 +136,8 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["sqldataclass.tests.*"]
 disallow_untyped_decorators = false
+# SQLDataclass metaclass creates classes dynamically; mypy can't follow the transformation
+disable_error_code = ["attr-defined", "call-arg", "unused-ignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["src"]

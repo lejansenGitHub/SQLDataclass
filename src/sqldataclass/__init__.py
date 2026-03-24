@@ -1,12 +1,13 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 from sqldataclass.hydration import (
     discriminator_map,
     format_discriminated,
     nest_fields,
 )
+from sqldataclass.model import Field, SQLDataclass
 from sqldataclass.query import fetch_all, fetch_one, load_all, select_columns
 from sqldataclass.registry import (
     Base,
@@ -23,6 +24,8 @@ from sqldataclass.write import (
 
 __all__ = [
     "Base",
+    "Field",
+    "SQLDataclass",
     "create_all_tables",
     "discriminator_map",
     "drop_all_tables",
