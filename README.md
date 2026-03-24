@@ -145,6 +145,42 @@ User.update({"is_active": False}, where=User.c.id == 42)
 
 You don't need to define every column — only the ones you read or write. Columns not in your model are simply ignored.
 
+### Migrations with Alembic
+
+SQLDataclass uses standard SQLAlchemy `MetaData`, so [Alembic](https://alembic.sqlalchemy.org/) works out of the box for schema migrations.
+
+**Setup:**
+
+```bash
+pip install alembic
+alembic init migrations
+```
+
+**Edit `migrations/env.py`** — point Alembic at your SQLDataclass metadata:
+
+```python
+from sqldataclass import SQLDataclass
+
+# Import your models so they register their tables
+from myapp.models import Hero, Team  # noqa: F401
+
+target_metadata = SQLDataclass.metadata
+```
+
+**Generate and run migrations:**
+
+```bash
+# Auto-generate migration from model changes
+alembic revision --autogenerate -m "add heroes table"
+
+# Apply migration
+alembic upgrade head
+```
+
+Alembic detects changes between your model definitions and the actual database schema, then generates migration scripts for adding/removing columns, creating tables, etc.
+
+This replaces `metadata.create_all()` for production — use `create_all()` only for development/testing, and Alembic for production deployments.
+
 ## Relationships
 
 SQLDataclass supports all common relationship patterns, loaded eagerly via SQLAlchemy Core — no ORM session required.
