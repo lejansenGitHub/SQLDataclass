@@ -321,6 +321,23 @@ For advanced use cases, the underlying bridge functions are also available:
 5. **FastAPI native** — pydantic dataclasses work as response models out of the box
 6. **Escape hatches** — low-level bridge API available when you need full control
 
+## Known limitations
+
+SQLDataclass intentionally trades some ORM features for memory efficiency and simplicity. Here's what it doesn't do (yet):
+
+| Limitation | Workaround |
+|---|---|
+| **No lazy loading** — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
+| **No `update()` or `delete()` methods** | Use SQLAlchemy Core directly: `conn.execute(table.update().where(...).values(...))` |
+| **No pagination** (`LIMIT`/`OFFSET`) in `load_all` | Build custom queries: `Hero.select().limit(10).offset(20)` with `load_all(conn, query)` |
+| **No nested relationship loading** — `hero.team.league` won't auto-load `league` | Load each level separately, or build a custom joined query |
+| **No relationship ordering** — collection children are returned in DB order | Sort in application code or add `ORDER BY` via custom query |
+| **No single-table or joined-table inheritance** | Use discriminated unions with `Relationship(discriminator=...)` |
+| **Composite PKs don't work with collection relationships** | Use single-column PKs on models with `list[...]` relationships |
+| **No identity map** — loading the same row twice creates two separate objects | Acceptable for immutable dataclass pattern; cache at application level if needed |
+| **`bind()` is global** — can't bind different engines to different models | Pass `conn` explicitly when using multiple databases |
+| **Eager-only collections** — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
+
 ## Requirements
 
 - Python 3.13+

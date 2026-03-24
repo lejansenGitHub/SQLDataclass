@@ -32,6 +32,18 @@ All notable changes to SQLDataclass will be documented in this file.
 - **DB loading (SQLite):** 3.3x less memory than SQLModel, 2.9x less than SQLAlchemy ORM
 - **DB loading (PostgreSQL):** 3.3x less memory than SQLModel, 2.9x less than SQLAlchemy ORM
 
+### Known Limitations
+- No lazy loading — relationships are always eager-loaded
+- No `update()` or `delete()` model methods — use SQLAlchemy Core directly
+- No pagination (`LIMIT`/`OFFSET`) in `load_all` — build custom queries with `.select()`
+- No nested relationship loading (e.g., `hero.team.league`)
+- No relationship ordering — children returned in DB insertion order
+- No single-table or joined-table inheritance — use discriminated unions instead
+- Composite primary keys incompatible with collection relationships
+- No identity map — same row loaded twice produces two separate objects
+- `bind()` is global — cannot bind different engines per model
+- One-to-many/many-to-many always load all children (no selective eager loading)
+
 ## [0.0.1] - 2026-03-24
 
 ### Added
