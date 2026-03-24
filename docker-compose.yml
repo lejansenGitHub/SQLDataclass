@@ -1,0 +1,18 @@
+services:
+  sandbox:
+    build: .
+    volumes:
+      - .:/workspace
+      # Auth — mounted to staging dir, copied to dev home at startup
+      - ~/.claude/sessions:/tmp/claude-sessions:ro
+      - ~/.claude/statsig:/tmp/claude-statsig:ro
+      # Deploy key scoped to SQLDataclass repo only
+      - ~/.ssh/sqldataclass_deploy:/home/dev/.ssh/id_ed25519:ro
+      - ~/.ssh/sqldataclass_deploy.pub:/home/dev/.ssh/id_ed25519.pub:ro
+      - ~/.ssh/known_hosts:/home/dev/.ssh/known_hosts:ro
+    environment:
+      - DATABASE_URL=postgresql://postgres@localhost:5432/sqldataclass
+      - REDIS_URL=redis://localhost:6379
+      - GIT_SSH_COMMAND=ssh -i /home/dev/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new
+    stdin_open: true
+    tty: true
