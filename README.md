@@ -70,46 +70,54 @@ This creates:
 - A **pydantic dataclass** with `slots=True` (validation, FastAPI compat, minimal memory)
 - A **SQLAlchemy Table** (for DDL and queries, never instantiated)
 
-### Create tables
+### Setup
 
 ```python
 from sqlalchemy import create_engine
 
 engine = create_engine("sqlite:///app.db")
 SQLDataclass.metadata.create_all(engine)
+
+# Bind the engine once — conn becomes optional everywhere
+SQLDataclass.bind(engine)
 ```
 
 ### Insert data
 
 ```python
 hero = Hero(name="Spider-Man", secret_name="Peter Parker")
+hero.insert()
 
-with engine.begin() as conn:
-    hero.insert(conn)
-
-    # Or bulk insert
-    heroes = [
-        Hero(name="Iron Man", secret_name="Tony Stark", age=45),
-        Hero(name="Thor", secret_name="Thor Odinson", age=1500),
-    ]
-    Hero.insert_many(conn, heroes)
+# Bulk insert
+Hero.insert_many(objects=[
+    Hero(name="Iron Man", secret_name="Tony Stark", age=45),
+    Hero(name="Thor", secret_name="Thor Odinson", age=1500),
+])
 ```
 
 ### Query data
 
 ```python
-with engine.connect() as conn:
-    # Load all
-    heroes = Hero.load_all(conn)
+# Load all
+heroes = Hero.load_all()
 
-    # Filter
-    heroes = Hero.load_all(conn, Hero.c.age > 100)
+# Filter
+heroes = Hero.load_all(where=Hero.c.age > 100)
 
-    # Load one
-    hero = Hero.load_one(conn, Hero.c.name == "Spider-Man")
+# Load one
+hero = Hero.load_one(where=Hero.c.name == "Spider-Man")
 
-    # Custom queries
-    heroes = Hero.load_all(conn, Hero.c.age > 25, order_by=Hero.c.name)
+# Order
+heroes = Hero.load_all(where=Hero.c.age > 25, order_by=Hero.c.name)
+```
+
+### Explicit connections (when you need transaction control)
+
+```python
+with engine.begin() as conn:
+    hero1.insert(conn)
+    hero2.insert(conn)
+    # both commit together, or both rollback on error
 ```
 
 ## Relationships
@@ -131,9 +139,8 @@ class Hero(SQLDataclass, table=True):
     team_id: int = Field(foreign_key="team.id")
     team: Team | None = Relationship()  # auto-JOINed on load
 
-with engine.connect() as conn:
-    hero = Hero.load_one(conn, Hero.c.name == "Spider-Man")
-    print(hero.team.name)  # "Avengers"
+hero = Hero.load_one(where=Hero.c.name == "Spider-Man")
+print(hero.team.name)  # "Avengers"
 ```
 
 ### One-to-many
@@ -144,9 +151,8 @@ class Team(SQLDataclass, table=True):
     name: str
     heroes: list[Hero] = Relationship(back_populates="team")
 
-with engine.connect() as conn:
-    team = Team.load_one(conn, Team.c.name == "Avengers")
-    print([h.name for h in team.heroes])  # ["Iron Man", "Thor"]
+team = Team.load_one(where=Team.c.name == "Avengers")
+print([h.name for h in team.heroes])  # ["Iron Man", "Thor"]
 ```
 
 One-to-many uses a **two-query strategy** (not JOIN-then-group) for memory efficiency — one query for parents, one `WHERE fk IN (...)` for all children.
@@ -168,9 +174,8 @@ class Team(SQLDataclass, table=True):
     name: str
     heroes: list[Hero] = Relationship(link_model=HeroTeamLink)
 
-with engine.connect() as conn:
-    hero = Hero.load_one(conn, Hero.c.name == "Wolverine")
-    print([t.name for t in hero.teams])  # ["Avengers", "X-Men"]
+hero = Hero.load_one(where=Hero.c.name == "Wolverine")
+print([t.name for t in hero.teams])  # ["Avengers", "X-Men"]
 ```
 
 ### Discriminated unions
@@ -196,10 +201,9 @@ class Participant(SQLDataclass, table=True):
     behavior: str  # discriminator column
     data: NormalData | BatteryData = Relationship(discriminator="behavior")
 
-with engine.connect() as conn:
-    p = Participant.load_one(conn, Participant.c.name == "Alice")
-    print(type(p.data).__name__)  # "NormalData"
-    print(p.data.p_max)           # 100.0
+p = Participant.load_one(where=Participant.c.name == "Alice")
+print(type(p.data).__name__)  # "NormalData"
+print(p.data.p_max)           # 100.0
 ```
 
 ## Use with FastAPI
@@ -213,13 +217,11 @@ app = FastAPI()
 
 @app.get("/heroes", response_model=list[Hero])
 def get_heroes():
-    with engine.connect() as conn:
-        return Hero.load_all(conn)
+    return Hero.load_all()
 
 @app.get("/heroes/{hero_id}", response_model=Hero)
 def get_hero(hero_id: int):
-    with engine.connect() as conn:
-        return Hero.load_one(conn, Hero.c.id == hero_id)
+    return Hero.load_one(where=Hero.c.id == hero_id)
 ```
 
 ### Data-only models (API schemas)
@@ -235,8 +237,7 @@ class HeroCreate(SQLDataclass):
 @app.post("/heroes", response_model=Hero)
 def create_hero(data: HeroCreate):
     hero = Hero(name=data.name, secret_name=data.secret_name, age=data.age)
-    with engine.begin() as conn:
-        hero.insert(conn)
+    hero.insert()
     return hero
 ```
 
@@ -281,15 +282,18 @@ class User(SQLDataclass, table=True):
 
 ### Model methods
 
+All methods accept an optional `conn` parameter. If omitted, a connection is auto-created from the bound engine (see `SQLDataclass.bind(engine)`).
+
 | Method | Type | Description |
 |---|---|---|
+| `SQLDataclass.bind(engine)` | classmethod | Bind engine — makes `conn` optional everywhere |
 | `Model.select()` | classmethod | Build a `SELECT` query |
-| `Model.load_all(conn, where=, order_by=)` | classmethod | Load all matching rows with relationships |
-| `Model.load_one(conn, where=)` | classmethod | Load one row or `None` |
-| `Model.insert_many(conn, objects)` | classmethod | Bulk insert |
-| `instance.insert(conn)` | instance | Insert this row |
+| `Model.load_all(conn=, where=, order_by=)` | classmethod | Load all matching rows with relationships |
+| `Model.load_one(conn=, where=)` | classmethod | Load one row or `None` |
+| `Model.insert_many(conn=, objects=)` | classmethod | Bulk insert |
+| `instance.insert(conn=)` | instance | Insert this row |
 | `instance.to_dict(exclude_keys=)` | instance | Flat dict for SQL |
-| `instance.upsert(conn, index_elements=)` | instance | PostgreSQL upsert |
+| `instance.upsert(conn=, index_elements=)` | instance | PostgreSQL upsert |
 | `Model.c` | attribute | Column access for WHERE clauses |
 | `Model.metadata` | attribute | SQLAlchemy MetaData |
 
