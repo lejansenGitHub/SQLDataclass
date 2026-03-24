@@ -910,11 +910,13 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
         """Build a ``SELECT`` for this table."""
         return sa_select(klass.__table__)
 
-    def _model_load_all(
+    def _model_load_all(  # noqa: PLR0913
         klass: Any,
         conn: Connection | None = None,
         where: Any = None,
         order_by: Any = None,
+        limit: int | None = None,
+        offset: int | None = None,
     ) -> list[Any]:
         """Load all matching rows as instances of this class.
 
@@ -922,11 +924,18 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
         """
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
-                return _model_load_all(klass, auto_conn, where=where, order_by=order_by)
+                return _model_load_all(klass, auto_conn, where=where, order_by=order_by, limit=limit, offset=offset)
+
+        def _apply_pagination(q: Any) -> Any:
+            if limit is not None:
+                q = q.limit(limit)
+            if offset is not None:
+                q = q.offset(offset)
+            return q
 
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
         if _has_join_relationships(rels):
-            query = _build_joined_query(klass, where=where, order_by=order_by)
+            query = _apply_pagination(_build_joined_query(klass, where=where, order_by=order_by))
             results = [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
         elif rels:
             query = sa_select(klass.__table__)
@@ -934,6 +943,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
                 query = query.where(where)
             if order_by is not None:
                 query = query.order_by(order_by)
+            query = _apply_pagination(query)
             results = _load_all(conn, query, klass)
         else:
             query = sa_select(klass.__table__)
@@ -941,6 +951,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
                 query = query.where(where)
             if order_by is not None:
                 query = query.order_by(order_by)
+            query = _apply_pagination(query)
             return _load_all(conn, query, klass)
 
         _populate_collections(klass, results, conn)
@@ -1107,6 +1118,8 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
             conn: Connection | None = None,
             where: Any = None,
             order_by: Any = None,
+            limit: int | None = None,
+            offset: int | None = None,
         ) -> list[Self]: ...
 
         @classmethod

@@ -2,6 +2,17 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.0.7] - 2026-03-24
+
+### Added
+- `limit` and `offset` parameters on `Model.load_all()` for pagination
+  ```python
+  heroes = Hero.load_all(limit=10, offset=20, order_by=Hero.c.name)
+  ```
+
+### Fixed
+- Removed "No pagination" from known limitations
+
 ## [0.0.6] - 2026-03-24
 
 ### Added

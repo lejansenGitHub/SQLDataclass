@@ -331,7 +331,7 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 |---|---|
 | **No lazy loading** — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
 | ~~No `update()` or `delete()` methods~~ | **Fixed in v0.0.6** |
-| **No pagination** (`LIMIT`/`OFFSET`) in `load_all` | Build custom queries: `Hero.select().limit(10).offset(20)` with `load_all(conn, query)` |
+| ~~No pagination in `load_all`~~ | **Fixed in v0.0.7** — `Hero.load_all(limit=10, offset=20)` |
 | **No nested relationship loading** — `hero.team.league` won't auto-load `league` | Load each level separately, or build a custom joined query |
 | **No relationship ordering** — collection children are returned in DB order | Sort in application code or add `ORDER BY` via custom query |
 | **No single-table or joined-table inheritance** | Use discriminated unions with `Relationship(discriminator=...)` |

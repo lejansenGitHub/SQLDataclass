@@ -1,6 +1,6 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 from sqldataclass.hydration import (
     discriminator_map,
