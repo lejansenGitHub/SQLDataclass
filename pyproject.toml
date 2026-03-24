@@ -1,20 +1,43 @@
 [project]
 name = "sqldataclass"
-version = "0.1.0"
-description = "SQLModel-like ORM using pydantic dataclasses with memory-efficient DB access patterns"
+version = "0.0.3"
+description = "Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"
 authors = [
-    { name = "Lennart Jansen" },
+    { name = "Lennart Jansen", email = "lejansen.home@gmail.com" },
+]
+keywords = [
+    "orm",
+    "pydantic",
+    "sqlalchemy",
+    "dataclass",
+    "memory-efficient",
+    "fastapi",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+    "Framework :: FastAPI",
+    "Framework :: Pydantic",
+    "Framework :: Pydantic :: 2",
 ]
 dependencies = [
     "pydantic>=2.0",
     "sqlalchemy>=2.0",
-    "psycopg[binary]>=3.0",
 ]
 
 [project.optional-dependencies]
+postgres = [
+    "psycopg[binary]>=3.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
@@ -23,12 +46,30 @@ dev = [
     "pre-commit>=4.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/lejansenGitHub/SQLDataclass"
+Repository = "https://github.com/lejansenGitHub/SQLDataclass"
+Issues = "https://github.com/lejansenGitHub/SQLDataclass/issues"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqldataclass"]
+exclude = ["src/sqldataclass/tests"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/sqldataclass/py.typed" = "sqldataclass/py.typed"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/sqldataclass/**/*.py",
+    "src/sqldataclass/py.typed",
+    "pyproject.toml",
+    "README.md",
+    "LICENSE",
+]
 
 [tool.ruff]
 target-version = "py313"

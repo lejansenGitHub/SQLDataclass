@@ -506,10 +506,9 @@ wheels = [
 
 [[package]]
 name = "sqldataclass"
-version = "0.1.0"
+version = "0.0.3"
 source = { editable = "." }
 dependencies = [
-    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
@@ -522,19 +521,22 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["postgres", "dev"]
 
 [[package]]
 name = "typing-extensions"
