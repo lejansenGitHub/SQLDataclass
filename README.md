@@ -2,38 +2,41 @@
 
 **Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible.**
 
-Define your models once — like SQLModel — but get the memory footprint of plain dataclasses. SQLDataclass uses pydantic dataclasses (`slots=True`) under the hood, giving you **12.8x less memory than BaseModel** and **5.9x less than ORM instances**, with full pydantic validation and native FastAPI support.
+Define your models once — like SQLModel — but get the memory footprint of plain dataclasses. SQLDataclass uses pydantic dataclasses (`slots=True`) under the hood, with full pydantic validation, relationships, and native FastAPI support.
 
 ## Performance
 
-### Memory: object construction (19 fields, 10k rows)
+### Object construction (20 fields, 10k objects)
 
-| Representation | B/row | vs SQLDataclass | Construction (ms) |
+| Library | B/row | vs SQLDataclass | Construction time |
 |---|---:|---:|---:|
-| **SQLDataclass** | **240** | **1.0x** | **14** |
-| stdlib dataclass | 224 | 0.9x | 3 |
-| pydantic dataclass (manual) | 224 | 0.9x | 26 |
-| Pydantic BaseModel | 792 | 3.3x | 10 |
-| **SQLModel** | **2,060** | **8.6x** | **271** |
+| **SQLDataclass** | **322** | **1.0x** | **25 ms** |
+| Pydantic BaseModel | 792 | 2.5x | 10 ms |
+| SQLAlchemy ORM | 1,699 | **5.3x** | 129 ms |
+| **SQLModel** | **4,549** | **14.1x** | **315 ms** |
 
-SQLDataclass matches the memory footprint of a plain `@dataclass(slots=True)` while giving you full pydantic validation, SQLAlchemy table management, and FastAPI compatibility.
+### Database loading — SQLite (10k rows, 20 fields)
 
-**vs SQLModel:** 8.6x less memory, 19x faster construction.
-
-### Memory: database loading (10k rows from SQLite)
-
-| Approach | B/row | Total | vs SQLDataclass |
+| Library | B/row | vs SQLDataclass | Load time |
 |---|---:|---:|---:|
-| **SQLDataclass** `load_all` | **188** | 1.9 MB | **1.0x** |
-| **SQLModel** `session.exec` | **1,898** | 19.0 MB | **10.1x** |
+| **SQLDataclass** | **752** | **1.0x** | **57 ms** |
+| SQLAlchemy ORM | 2,142 | 2.9x | 47 ms |
+| **SQLModel** | **2,454** | **3.3x** | **56 ms** |
 
-When loading 10k rows from a database, SQLDataclass uses **10x less peak memory** than SQLModel and loads **1.7x faster**.
+### Database loading — PostgreSQL (10k rows, 20 fields)
+
+| Library | B/row | vs SQLDataclass | Load time |
+|---|---:|---:|---:|
+| **SQLDataclass** | **748** | **1.0x** | **57 ms** |
+| SQLAlchemy ORM | 2,139 | 2.9x | 45 ms |
+| **SQLModel** | **2,451** | **3.3x** | **55 ms** |
 
 ### Why the difference?
 
 - SQLDataclass uses **pydantic dataclasses with `slots=True`** — no `__dict__`, minimal per-instance overhead
 - SQLModel inherits from both Pydantic BaseModel and SQLAlchemy ORM — each instance carries validation machinery AND ORM state tracking
-- SQLDataclass queries via **SQLAlchemy Core** (raw result rows), not the ORM session (which materializes heavy mapped instances)
+- SQLAlchemy ORM instances carry identity map, state tracking, and relationship loading machinery
+- SQLDataclass queries via **SQLAlchemy Core** (raw result rows), not the ORM session
 
 ## Install
 
@@ -106,11 +109,100 @@ with engine.connect() as conn:
     hero = Hero.load_one(conn, Hero.c.name == "Spider-Man")
 
     # Custom queries
-    query = Hero.select().where(Hero.c.age > 25).order_by(Hero.c.name)
     heroes = Hero.load_all(conn, Hero.c.age > 25, order_by=Hero.c.name)
 ```
 
-### Use with FastAPI
+## Relationships
+
+SQLDataclass supports all common relationship patterns, loaded eagerly via SQLAlchemy Core — no ORM session required.
+
+### Many-to-one
+
+```python
+from sqldataclass import SQLDataclass, Field, Relationship
+
+class Team(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    team_id: int = Field(foreign_key="team.id")
+    team: Team | None = Relationship()  # auto-JOINed on load
+
+with engine.connect() as conn:
+    hero = Hero.load_one(conn, Hero.c.name == "Spider-Man")
+    print(hero.team.name)  # "Avengers"
+```
+
+### One-to-many
+
+```python
+class Team(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    heroes: list[Hero] = Relationship(back_populates="team")
+
+with engine.connect() as conn:
+    team = Team.load_one(conn, Team.c.name == "Avengers")
+    print([h.name for h in team.heroes])  # ["Iron Man", "Thor"]
+```
+
+One-to-many uses a **two-query strategy** (not JOIN-then-group) for memory efficiency — one query for parents, one `WHERE fk IN (...)` for all children.
+
+### Many-to-many
+
+```python
+class HeroTeamLink(SQLDataclass, table=True):
+    hero_id: int = Field(primary_key=True, foreign_key="hero.id")
+    team_id: int = Field(primary_key=True, foreign_key="team.id")
+
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    teams: list[Team] = Relationship(link_model=HeroTeamLink)
+
+class Team(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    heroes: list[Hero] = Relationship(link_model=HeroTeamLink)
+
+with engine.connect() as conn:
+    hero = Hero.load_one(conn, Hero.c.name == "Wolverine")
+    print([t.name for t in hero.teams])  # ["Avengers", "X-Men"]
+```
+
+### Discriminated unions
+
+For polymorphic data stored in separate tables:
+
+```python
+from typing import Literal
+
+class NormalData(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="participant.id")
+    behavior: Literal["normal"] = "normal"
+    p_max: float = 0.0
+
+class BatteryData(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="participant.id")
+    behavior: Literal["battery"] = "battery"
+    capacity: float = 0.0
+
+class Participant(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    behavior: str  # discriminator column
+    data: NormalData | BatteryData = Relationship(discriminator="behavior")
+
+with engine.connect() as conn:
+    p = Participant.load_one(conn, Participant.c.name == "Alice")
+    print(type(p.data).__name__)  # "NormalData"
+    print(p.data.p_max)           # 100.0
+```
+
+## Use with FastAPI
 
 Pydantic dataclasses are first-class citizens in FastAPI — no conversion needed:
 
@@ -174,6 +266,17 @@ class User(SQLDataclass, table=True):
 | `min_length`, `max_length` | `int` | Pydantic string validators |
 | `pattern` | `str` | Pydantic regex pattern |
 
+## Relationship options
+
+`Relationship()` marks a field as loaded from a related table — not stored as a column.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `back_populates` | `str` | Inverse field name on the child model |
+| `link_model` | `type` | Link table class for many-to-many |
+| `discriminator` | `str` | Column name for discriminated unions |
+| `default` | `Any` | Default value (`None` for many-to-one, `[]` for collections) |
+
 ## API reference
 
 ### Model methods
@@ -181,7 +284,7 @@ class User(SQLDataclass, table=True):
 | Method | Type | Description |
 |---|---|---|
 | `Model.select()` | classmethod | Build a `SELECT` query |
-| `Model.load_all(conn, where=, order_by=)` | classmethod | Load all matching rows |
+| `Model.load_all(conn, where=, order_by=)` | classmethod | Load all matching rows with relationships |
 | `Model.load_one(conn, where=)` | classmethod | Load one row or `None` |
 | `Model.insert_many(conn, objects)` | classmethod | Bulk insert |
 | `instance.insert(conn)` | instance | Insert this row |
@@ -210,8 +313,9 @@ For advanced use cases, the underlying bridge functions are also available:
 1. **One class, one definition** — no separate SQL schema and domain model
 2. **Memory-first** — pydantic dataclasses with `slots=True` match stdlib dataclass footprint
 3. **SQLAlchemy Core, not ORM** — explicit queries, no hidden state tracking
-4. **FastAPI native** — pydantic dataclasses work as response models out of the box
-5. **Escape hatches** — low-level bridge API available when you need full control
+4. **Relationships without a session** — eager loading via JOINs and two-query strategy
+5. **FastAPI native** — pydantic dataclasses work as response models out of the box
+6. **Escape hatches** — low-level bridge API available when you need full control
 
 ## Requirements
 
