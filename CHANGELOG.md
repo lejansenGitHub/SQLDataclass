@@ -2,6 +2,16 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.0.9] - 2026-03-24
+
+### Added
+- Per-model engine binding: `Hero.bind(engine_a)`, `Team.bind(engine_b)`
+- Per-model engines take priority over `SQLDataclass.bind()` global engine
+- Enables multi-database setups (e.g., read replica + primary)
+
+### Fixed
+- Removed "`bind()` is global" from known limitations
+
 ## [0.0.8] - 2026-03-24
 
 ### Added

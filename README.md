@@ -338,7 +338,7 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | **No single-table or joined-table inheritance** | Use discriminated unions with `Relationship(discriminator=...)` |
 | **Composite PKs don't work with collection relationships** | Use single-column PKs on models with `list[...]` relationships |
 | **No identity map** — loading the same row twice creates two separate objects | Acceptable for immutable dataclass pattern; cache at application level if needed |
-| **`bind()` is global** — can't bind different engines to different models | Pass `conn` explicitly when using multiple databases |
+| ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |
 | **Eager-only collections** — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
 
 ## Requirements

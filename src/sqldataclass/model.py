@@ -1110,17 +1110,22 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
     def bind(cls, engine: Engine) -> None:
         """Bind an engine so ``conn`` becomes optional on all methods.
 
-        Call once at startup::
+        Global binding (all models)::
 
             SQLDataclass.bind(engine)
 
-        Then use without passing conn::
+        Per-model binding (overrides global)::
 
-            heroes = Hero.load_all()
-            hero.insert()
+            Hero.bind(hero_engine)
+            Team.bind(team_engine)
+
+        Per-model engines take priority over the global engine.
         """
-        global _BOUND_ENGINE  # noqa: PLW0603
-        _BOUND_ENGINE = engine
+        if cls is SQLDataclass or cls.__name__ == "SQLDataclass":
+            global _BOUND_ENGINE  # noqa: PLW0603
+            _BOUND_ENGINE = engine
+        else:
+            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]
 
     if TYPE_CHECKING:
         __table__: ClassVar[Table]
