@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from typing import Any, Sequence
 
+import pydantic
 from sqlalchemy import insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
@@ -71,6 +72,7 @@ def flatten_for_table(
         if key not in exclude_keys
         and key not in rel_keys
         and key not in non_column_keys
-        and not isinstance(value, (dict, list))
+        and not isinstance(value, dict | list)
         and not dataclasses.is_dataclass(value)
+        and not isinstance(value, pydantic.BaseModel)
     }

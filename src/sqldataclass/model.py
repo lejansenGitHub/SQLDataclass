@@ -52,6 +52,7 @@ from typing import (
 )
 from uuid import UUID
 
+from pydantic import ConfigDict
 from pydantic import Field as PydanticField
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.fields import FieldInfo
@@ -89,6 +90,22 @@ from sqldataclass.write import flatten_for_table as _flatten_for_table
 from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import insert_row as _insert_row
 from sqldataclass.write import upsert_row as _upsert_row
+
+# ---------------------------------------------------------------------------
+# Pydantic dataclass configs
+# ---------------------------------------------------------------------------
+
+_DATACLASS_CONFIG = ConfigDict(
+    allow_inf_nan=False,
+    arbitrary_types_allowed=True,
+    extra="forbid",
+)
+
+_STI_CHILD_CONFIG = ConfigDict(
+    allow_inf_nan=False,
+    arbitrary_types_allowed=True,
+    extra="ignore",
+)
 
 # ---------------------------------------------------------------------------
 # Type mapping: Python type → SQLAlchemy column type
@@ -138,8 +155,7 @@ def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
     sa_type = _TYPE_MAP.get(inner)
     if sa_type is None:
         raise TypeError(
-            f"Cannot map Python type {tp!r} to a SQLAlchemy column type. "
-            f"Use Field(sa_type=...) to specify explicitly."
+            f"Cannot map Python type {tp!r} to a SQLAlchemy column type. Use Field(sa_type=...) to specify explicitly."
         )
     return sa_type
 
@@ -726,12 +742,24 @@ def _populate_collections(  # noqa: PLR0912
 
         if rel.kind == "one_to_many":
             _load_one_to_many(
-                conn, field_name, child_type, parent_table, parent_pks, pk_to_parents,
-                order_by=rel.order_by, back_populates=rel.back_populates,
+                conn,
+                field_name,
+                child_type,
+                parent_table,
+                parent_pks,
+                pk_to_parents,
+                order_by=rel.order_by,
+                back_populates=rel.back_populates,
             )
         elif rel.kind == "many_to_many" and rel.link_model is not None:
             _load_many_to_many(
-                conn, field_name, child_type, rel.link_model, parent_table, parent_pks, pk_to_parents,
+                conn,
+                field_name,
+                child_type,
+                rel.link_model,
+                parent_table,
+                parent_pks,
+                pk_to_parents,
                 order_by=rel.order_by,
             )
 
@@ -966,6 +994,12 @@ class SQLDataclassMeta(type):
             cls.metadata = MetaData()  # type: ignore[attr-defined]
             return cls
 
+        # Enforce no cross-inheritance with SQLModel
+        for base in bases:
+            if getattr(base, "__sqlmodel_is_basemodel__", False):
+                msg = f"{name} cannot inherit from both SQLDataclass and SQLModel. Use composition instead."
+                raise TypeError(msg)
+
         # Single-table inheritance: auto-detect if parent has __discriminator__
         sti_parent = _find_sti_parent(bases)
         if sti_parent is not None and not table:
@@ -1060,7 +1094,8 @@ def _build_sti_child(  # noqa: PLR0915
 
         clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
         cls: Any = type.__new__(mcs, name, clean_bases, namespace)
-        dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
+        # STI children use extra="ignore" since the shared table has columns from other subtypes
+        dc_cls: Any = pydantic_dataclass(cls, config=_STI_CHILD_CONFIG, slots=True, kw_only=True)
     finally:
         _BUILDING.discard(qualname)
 
@@ -1138,7 +1173,11 @@ def _build_sqldataclass(
             resolved = dict(annotations)
 
         sa_table = _build_table(
-            tablename, resolved, namespace, target_metadata, relationship_fields=relationship_fields,
+            tablename,
+            resolved,
+            namespace,
+            target_metadata,
+            relationship_fields=relationship_fields,
         )
 
         # Resolve relationships (needs resolved type hints)
@@ -1148,7 +1187,7 @@ def _build_sqldataclass(
     cls: Any = type.__new__(mcs, name, bases, namespace, **kwargs)
 
     # Apply pydantic dataclass with slots for memory efficiency
-    dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
+    dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
 
     # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
@@ -1189,10 +1228,7 @@ def _get_engine(cls: Any) -> Engine:
     """Get the bound engine, or raise if not bound."""
     engine = getattr(cls, "__sqldataclass_engine__", None) or _BOUND_ENGINE
     if engine is None:
-        msg = (
-            "No connection provided and no engine bound. "
-            "Either pass conn= or call SQLDataclass.bind(engine) first."
-        )
+        msg = "No connection provided and no engine bound. Either pass conn= or call SQLDataclass.bind(engine) first."
         raise RuntimeError(msg)
     return engine
 

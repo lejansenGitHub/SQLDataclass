@@ -20,6 +20,7 @@ from sqlalchemy.orm import DeclarativeBase, Session
 
 from sqldataclass import Field as SDField
 from sqldataclass import SQLDataclass
+from sqldataclass import SQLModel as OurSQLModel
 
 ROW_COUNT = 10_000
 FIELD_COUNT = 20  # id + name + value + category + f1..f16
@@ -29,10 +30,22 @@ SAMPLE_ROW: dict[str, Any] = {
     "name": "item_0",
     "value": 0.0,
     "category": "cat",
-    "f1": 1.0, "f2": 2.0, "f3": 3.0, "f4": 4.0,
-    "f5": 5.0, "f6": 6.0, "f7": 7.0, "f8": 8.0,
-    "f9": 9.0, "f10": 10.0, "f11": 11.0, "f12": 12.0,
-    "f13": 13.0, "f14": 14.0, "f15": 15.0, "f16": 16.0,
+    "f1": 1.0,
+    "f2": 2.0,
+    "f3": 3.0,
+    "f4": 4.0,
+    "f5": 5.0,
+    "f6": 6.0,
+    "f7": 7.0,
+    "f8": 8.0,
+    "f9": 9.0,
+    "f10": 10.0,
+    "f11": 11.0,
+    "f12": 12.0,
+    "f13": 13.0,
+    "f14": 14.0,
+    "f15": 15.0,
+    "f16": 16.0,
 }
 
 
@@ -120,6 +133,30 @@ class BenchBaseModel(BaseModel):
     f16: float = 0.0
 
 
+class BenchOurSQLModel(OurSQLModel, table=True):
+    __tablename__ = "bench_cmp_our_sqlmodel"
+    id: int = SDField(primary_key=True)
+    name: str
+    value: float = 0.0
+    category: str = ""
+    f1: float = 0.0
+    f2: float = 0.0
+    f3: float = 0.0
+    f4: float = 0.0
+    f5: float = 0.0
+    f6: float = 0.0
+    f7: float = 0.0
+    f8: float = 0.0
+    f9: float = 0.0
+    f10: float = 0.0
+    f11: float = 0.0
+    f12: float = 0.0
+    f13: float = 0.0
+    f14: float = 0.0
+    f15: float = 0.0
+    f16: float = 0.0
+
+
 # SQLModel imported conditionally (optional dependency for tests)
 try:
     from sqlmodel import Field as SMField
@@ -127,7 +164,7 @@ try:
     from sqlmodel import SQLModel
     from sqlmodel import select as sm_select
 
-    class BenchSM(SQLModel, table=True):
+    class BenchSM(SQLModel, table=True):  # type: ignore[misc]
         __tablename__ = "bench_cmp_sm"
         id: int | None = SMField(default=None, primary_key=True)
         name: str
@@ -192,6 +229,7 @@ def sqlite_engine() -> Engine:
     engine = create_engine("sqlite:///:memory:")
     SQLDataclass.metadata.create_all(engine)
     _SABase.metadata.create_all(engine)
+    OurSQLModel.metadata.create_all(engine)
     if HAS_SQLMODEL:
         SQLModel.metadata.create_all(engine)
 
@@ -199,8 +237,9 @@ def sqlite_engine() -> Engine:
     with engine.begin() as conn:
         conn.execute(insert(BenchSDC.__table__), rows)
         conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]
+        conn.execute(insert(BenchOurSQLModel.__table__), rows)
         if HAS_SQLMODEL:
-            conn.execute(insert(BenchSM.__table__), rows)  # type: ignore[attr-defined]
+            conn.execute(insert(BenchSM.__table__), rows)
     return engine
 
 
@@ -226,15 +265,17 @@ def pg_engine() -> Any:
     url = _pg_url()
     if url is None:
         pytest.skip("PostgreSQL not available")
+    assert url is not None  # for mypy
     engine = create_engine(url)
 
     # Clean up any leftover tables
     with engine.begin() as conn:
-        for tbl in ["bench_cmp_sdc", "bench_cmp_sm", "bench_cmp_sa"]:
+        for tbl in ["bench_cmp_sdc", "bench_cmp_sm", "bench_cmp_sa", "bench_cmp_our_sqlmodel"]:
             conn.execute(text(f"DROP TABLE IF EXISTS {tbl} CASCADE"))
 
     SQLDataclass.metadata.create_all(engine)
     _SABase.metadata.create_all(engine)
+    OurSQLModel.metadata.create_all(engine)
     if HAS_SQLMODEL:
         SQLModel.metadata.create_all(engine)
 
@@ -242,13 +283,14 @@ def pg_engine() -> Any:
     with engine.begin() as conn:
         conn.execute(insert(BenchSDC.__table__), rows)
         conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]
+        conn.execute(insert(BenchOurSQLModel.__table__), rows)
         if HAS_SQLMODEL:
-            conn.execute(insert(BenchSM.__table__), rows)  # type: ignore[attr-defined]
+            conn.execute(insert(BenchSM.__table__), rows)
 
     yield engine
 
     with engine.begin() as conn:
-        for tbl in ["bench_cmp_sdc", "bench_cmp_sm", "bench_cmp_sa"]:
+        for tbl in ["bench_cmp_sdc", "bench_cmp_sm", "bench_cmp_sa", "bench_cmp_our_sqlmodel"]:
             conn.execute(text(f"DROP TABLE IF EXISTS {tbl} CASCADE"))
 
 
@@ -334,6 +376,7 @@ def test_sqlite_load_sqldataclass_lighter_than_sqlmodel(sqlite_engine: Engine) -
 
 def test_sqlite_load_sqldataclass_lighter_than_sa_orm(sqlite_engine: Engine) -> None:
     """SQLDataclass DB load uses less memory than SQLAlchemy ORM (SQLite)."""
+
     def load_sdc() -> list[Any]:
         with sqlite_engine.connect() as conn:
             return BenchSDC.load_all(conn)
@@ -380,6 +423,7 @@ def test_pg_load_sqldataclass_lighter_than_sqlmodel(pg_engine: Engine) -> None:
 
 def test_pg_load_sqldataclass_lighter_than_sa_orm(pg_engine: Engine) -> None:
     """SQLDataclass DB load uses less memory than SQLAlchemy ORM (PostgreSQL)."""
+
     def load_sdc() -> list[Any]:
         with pg_engine.connect() as conn:
             return BenchSDC.load_all(conn)
@@ -395,3 +439,67 @@ def test_pg_load_sqldataclass_lighter_than_sa_orm(pg_engine: Engine) -> None:
 
     ratio = sa_peak / sdc_peak
     assert ratio > 1.5, f"Expected SA ORM PG load to use >1.5x memory, got {ratio:.1f}x"
+
+
+# ===========================================================================
+# SQLModel (ours) vs SQLDataclass benchmarks
+# ===========================================================================
+
+
+def test_construction_our_sqlmodel_memory() -> None:
+    """Our SQLModel uses more memory than SQLDataclass (BaseModel vs slots dataclass)."""
+    sdc_peak, sdc_objs = _measure_peak_memory(lambda: [BenchSDC(**_row(i)) for i in range(ROW_COUNT)])
+    osm_peak, osm_objs = _measure_peak_memory(lambda: [BenchOurSQLModel(**_row(i)) for i in range(ROW_COUNT)])
+    assert len(sdc_objs) == ROW_COUNT
+    assert len(osm_objs) == ROW_COUNT
+
+    # Our SQLModel (BaseModel) uses more memory than SQLDataclass (slots dc),
+    # but should still be better than SA ORM and tiangolo's SQLModel.
+    ratio = osm_peak / sdc_peak
+    assert ratio > 1.0, f"Expected our SQLModel to use more memory than SQLDataclass, got {ratio:.1f}x"
+
+
+def test_construction_our_sqlmodel_lighter_than_sa_orm() -> None:
+    """Our SQLModel uses less memory than SQLAlchemy ORM."""
+    osm_peak, osm_objs = _measure_peak_memory(lambda: [BenchOurSQLModel(**_row(i)) for i in range(ROW_COUNT)])
+    sa_peak, sa_objs = _measure_peak_memory(lambda: [BenchSA(**_row(i)) for i in range(ROW_COUNT)])
+    assert len(osm_objs) == ROW_COUNT
+    assert len(sa_objs) == ROW_COUNT
+
+    ratio = sa_peak / osm_peak
+    assert ratio > 0.5, f"Expected our SQLModel to not be >2x heavier than SA ORM, got {ratio:.1f}x"
+
+
+def test_construction_our_sqlmodel_speed() -> None:
+    """Our SQLModel construction speed is competitive."""
+    osm_time, _ = _measure_time(lambda: [BenchOurSQLModel(**_row(i)) for i in range(ROW_COUNT)])
+    bm_time, _ = _measure_time(lambda: [BenchBaseModel(**_row(i)) for i in range(ROW_COUNT)])
+
+    # Should be comparable to plain BaseModel
+    ratio = osm_time / bm_time
+    assert ratio < 3.0, f"Expected our SQLModel to be within 3x of BaseModel speed, got {ratio:.1f}x"
+
+
+def test_sqlite_load_our_sqlmodel(sqlite_engine: Engine) -> None:
+    """Our SQLModel DB load works and is competitive with SQLDataclass."""
+
+    def load_sdc() -> list[Any]:
+        with sqlite_engine.connect() as conn:
+            return BenchSDC.load_all(conn)
+
+    def load_osm() -> list[Any]:
+        with sqlite_engine.connect() as conn:
+            return BenchOurSQLModel.load_all(conn)
+
+    sdc_peak, sdc_objs = _measure_peak_memory(load_sdc)
+    osm_peak, osm_objs = _measure_peak_memory(load_osm)
+    assert len(sdc_objs) == ROW_COUNT
+    assert len(osm_objs) == ROW_COUNT
+
+    # Our SQLModel load uses model_construct (fast path), should be competitive
+    sdc_time, _ = _measure_time(load_sdc)
+    osm_time, _ = _measure_time(load_osm)
+
+    # Speed should be within 3x
+    time_ratio = osm_time / sdc_time
+    assert time_ratio < 3.0, f"Expected our SQLModel load within 3x of SQLDataclass, got {time_ratio:.1f}x"

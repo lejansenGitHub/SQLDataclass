@@ -2,6 +2,7 @@
 
 __version__ = "0.1.2"
 
+from sqldataclass.basemodel import SQLModel
 from sqldataclass.hydration import (
     discriminator_map,
     format_discriminated,
@@ -27,6 +28,7 @@ __all__ = [
     "Field",
     "Relationship",
     "SQLDataclass",
+    "SQLModel",
     "create_all_tables",
     "discriminator_map",
     "drop_all_tables",

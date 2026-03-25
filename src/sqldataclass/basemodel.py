@@ -1,0 +1,215 @@
+"""SQLModel — Pydantic BaseModel with optional SQLAlchemy Core table.
+
+Usage::
+
+    from sqldataclass import SQLModel, Field
+
+    class Player(SQLModel, table=True):
+        id: int | None = Field(default=None, primary_key=True)
+        name: str
+
+Pure data model (no table)::
+
+    class PlayerCreate(SQLModel):
+        name: str
+"""
+
+from __future__ import annotations
+
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Self,
+    Sequence,
+    get_type_hints,
+)
+
+import pydantic
+from pydantic import ConfigDict
+from sqlalchemy import Column, MetaData, Table
+from sqlalchemy.engine import Engine
+
+from sqldataclass.model import (
+    _MODEL_REGISTRY,
+    SQLDataclassMeta,
+    _attach_convenience_methods,
+    _build_table,
+    _default_tablename,
+    _get_sa_info,
+    _is_relationship,
+    _resolve_relationships,
+    _ResolvedRelationship,
+)
+
+
+class SQLModel(pydantic.BaseModel):
+    """Base class for Pydantic BaseModel-backed models with optional SA table.
+
+    Subclass with ``table=True`` to create a database-backed model::
+
+        class Player(SQLModel, table=True):
+            id: int | None = Field(default=None, primary_key=True)
+            name: str
+
+    Subclass without ``table=True`` for pure data models::
+
+        class PlayerCreate(SQLModel):
+            name: str
+    """
+
+    model_config = ConfigDict(
+        allow_inf_nan=False,
+        arbitrary_types_allowed=True,
+        extra="forbid",
+    )
+
+    metadata: ClassVar[MetaData] = MetaData()
+
+    def __init_subclass__(cls, table: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002
+        super().__init_subclass__(**kwargs)
+
+        # Enforce no cross-inheritance with SQLDataclass
+        for base in cls.__mro__:
+            if isinstance(base, SQLDataclassMeta) and base.__name__ != "SQLDataclass":
+                msg = f"{cls.__name__} cannot inherit from both SQLModel and SQLDataclass. Use composition instead."
+                raise TypeError(msg)
+
+        # Store the table flag for __pydantic_init_subclass__ to use later
+        cls.__sqlmodel_is_basemodel__ = True
+        cls.__sqldataclass_is_table__ = table
+        cls.__relationships__ = {}
+        cls.__non_column_fields__ = frozenset()
+        cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]
+
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
+        """Called by Pydantic after model_fields are populated."""
+        super().__pydantic_init_subclass__(**kwargs)
+
+        table: bool = getattr(cls, "_sqlmodel_pending_table__", False)
+        if not table:
+            return
+
+        # Build a namespace dict compatible with _build_table / _resolve_relationships
+        namespace: dict[str, Any] = dict(cls.model_fields)
+
+        tablename = cls.__dict__.get("__tablename__") or _default_tablename(cls.__name__)
+
+        # Find metadata from class hierarchy
+        target_metadata = cls.metadata
+
+        # Detect non-column fields: relationships and column=False
+        # For BaseModel, the FieldInfo itself carries the metadata (not the default)
+        relationship_fields: set[str] = set()
+        non_column_fields: set[str] = set()
+        for field_name, field_info in cls.model_fields.items():
+            if _is_relationship(field_info):
+                relationship_fields.add(field_name)
+            else:
+                sa_info = _get_sa_info(field_info)
+                if sa_info is not None and not sa_info.column:
+                    non_column_fields.add(field_name)
+
+        cls.__non_column_fields__ = frozenset(non_column_fields)
+
+        # Resolve type hints — only include instance fields (exclude ClassVar)
+        try:
+            all_hints = get_type_hints(cls)
+        except Exception:
+            all_hints = dict(cls.__annotations__)
+        instance_field_names = set(cls.model_fields) | relationship_fields
+        resolved = {k: v for k, v in all_hints.items() if k in instance_field_names}
+
+        # Build SA table
+        sa_table: Table = _build_table(
+            tablename,
+            resolved,
+            namespace,
+            target_metadata,
+            relationship_fields=relationship_fields,
+        )
+
+        # Resolve relationships
+        resolved_rels = _resolve_relationships(cls, resolved, namespace)
+
+        # Attach SA artifacts
+        cls.__table__ = sa_table
+        cls.__tablename__ = tablename
+        cls.metadata = target_metadata
+        cls.c = sa_table.c
+        cls.__relationships__ = resolved_rels
+
+        # Pre-compute FK map
+        fk_map: dict[str, Column[Any]] = {}
+        for col in sa_table.columns:
+            for fk in col.foreign_keys:
+                try:
+                    fk_map[fk.column.table.name] = col
+                except Exception:
+                    pass
+        cls.__fk_map__ = fk_map  # type: ignore[attr-defined]
+
+        _attach_convenience_methods(cls)
+        _MODEL_REGISTRY[tablename] = cls
+
+    @classmethod
+    def bind(cls, engine: Engine) -> None:
+        """Bind an engine so ``conn`` becomes optional on all methods.
+
+        Global binding (all SQLModel classes)::
+
+            SQLModel.bind(engine)
+
+        Per-model binding::
+
+            Player.bind(player_engine)
+        """
+        if cls is SQLModel:
+            import sqldataclass.model as _model_mod
+
+            _model_mod._BOUND_ENGINE = engine
+        else:
+            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]
+
+    if TYPE_CHECKING:
+        from sqlalchemy.engine import Connection
+
+        __table__: ClassVar[Table]
+        __tablename__: ClassVar[str]
+        __sqldataclass_is_table__: ClassVar[bool]
+        __sqlmodel_is_basemodel__: ClassVar[bool]
+        __relationships__: ClassVar[dict[str, _ResolvedRelationship]]
+        __non_column_fields__: ClassVar[frozenset[str]]
+        c: ClassVar[Any]
+
+        @classmethod
+        def select(cls) -> Any: ...
+
+        @classmethod
+        def load_all(
+            cls,
+            conn: Connection | None = None,
+            where: Any = None,
+            order_by: Any = None,
+            limit: int | None = None,
+            offset: int | None = None,
+        ) -> list[Self]: ...
+
+        @classmethod
+        def load_one(cls, conn: Connection | None = None, where: Any = None) -> Self | None: ...
+
+        @classmethod
+        def insert_many(cls, conn: Connection | None = None, objects: Sequence[Self] | None = None) -> None: ...
+
+        @classmethod
+        def update(cls, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int: ...
+
+        @classmethod
+        def delete(cls, conn: Connection | None = None, where: Any = None) -> int: ...
+
+        def insert(self, conn: Connection | None = None) -> None: ...
+
+        def upsert(self, conn: Connection | None = None, *, index_elements: list[str]) -> None: ...
+
+        def to_dict(self, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]: ...

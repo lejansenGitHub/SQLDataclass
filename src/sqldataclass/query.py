@@ -15,11 +15,13 @@ from sqlalchemy.sql import Executable
 
 
 def _fast_construct(cls: type, data: Any) -> Any:
-    """Construct a pydantic dataclass using the fast validator path.
+    """Construct a pydantic dataclass or BaseModel using the fast path.
 
-    Bypasses the __init__ wrapper overhead while still running type validation.
-    ~2.8x faster than cls(**data) for pydantic dataclasses with many fields.
+    For BaseModel subclasses (SQLModel): uses model_construct (skips validation).
+    For pydantic dataclasses: uses validate_python (~2.8x faster than __init__).
     """
+    if getattr(cls, "__sqlmodel_is_basemodel__", False):
+        return cls.model_construct(**data)  # type: ignore[attr-defined]
     validator = getattr(cls, "__pydantic_validator__", None)
     if validator is not None:
         return validator.validate_python(data)
@@ -32,6 +34,8 @@ def load_all[T](conn: Connection, query: Executable, cls: type[T]) -> list[T]:
     Each row is converted to a domain object inline as the cursor is iterated,
     avoiding the memory spike of materializing all rows as dicts first.
     """
+    if getattr(cls, "__sqlmodel_is_basemodel__", False):
+        return [cls.model_construct(**dict(row)) for row in conn.execute(query).mappings()]  # type: ignore[attr-defined]
     validator = getattr(cls, "__pydantic_validator__", None)
     if validator is not None:
         return [validator.validate_python(dict(row)) for row in conn.execute(query).mappings()]
