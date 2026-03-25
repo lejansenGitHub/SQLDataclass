@@ -329,6 +329,50 @@ print(type(p.data).__name__)  # "NormalData"
 print(p.data.p_max)           # 100.0
 ```
 
+### Single-table inheritance
+
+Store multiple subtypes in one table with a discriminator column. Child classes can add their own fields (auto-appended as nullable columns):
+
+```python
+class Vehicle(SQLDataclass, table=True):
+    __discriminator__ = "type"  # enables single-table inheritance
+    id: int | None = Field(default=None, primary_key=True)
+    type: str = ""
+    name: str = ""
+
+class Car(Vehicle):                    # just inherit — no extra keywords
+    doors: int | None = None           # auto-added to Vehicle's table
+
+class Truck(Vehicle):
+    payload: float | None = None       # auto-added to Vehicle's table
+```
+
+```python
+# Insert — discriminator auto-set from class name
+Car(name="Civic", doors=4).insert()    # type="car"
+Truck(name="F-150", payload=1000).insert()  # type="truck"
+
+# Subtype queries — auto-filtered
+cars = Car.load_all()                  # only cars
+trucks = Truck.load_all()             # only trucks
+
+# Polymorphic query — returns correct subtypes
+all_vehicles = Vehicle.load_all()      # [Car(...), Truck(...), ...]
+type(all_vehicles[0])                  # <class 'Car'>
+
+# Scoped update/delete
+Car.update({"doors": 2}, where=Car.c.name == "Civic")
+Truck.delete()                         # only deletes trucks
+```
+
+Override the default discriminator value with `__discriminator_value__`:
+
+```python
+class Motorcycle(Vehicle):
+    __discriminator_value__ = "moto"   # instead of default "motorcycle"
+    wheel_count: int | None = None
+```
+
 ## Use with FastAPI
 
 Pydantic dataclasses are first-class citizens in FastAPI — no conversion needed:
