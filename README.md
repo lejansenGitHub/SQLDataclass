@@ -527,6 +527,12 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |
 | **Eager-only collections** (by design) — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
 
+## Acknowledgements
+
+SQLDataclass was inspired by [SQLModel](https://github.com/fastapi/sqlmodel) by Sebastián Ramírez and its contributors. Our goal was to recreate SQLModel's elegant single-class API while achieving lower memory consumption and higher throughput by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
+
+The memory and runtime performance research that informed SQLDataclass's architecture was conducted by Marcel Spitz, Kai Habermann, and Christian Siebert — their work on benchmarking pydantic model representations (BaseModel vs dataclasses vs stdlib) established the empirical foundation for this project's design decisions.
+
 ## Requirements
 
 - Python 3.13+
