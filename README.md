@@ -529,9 +529,11 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 
 ## Acknowledgements
 
-SQLDataclass was inspired by [SQLModel](https://github.com/fastapi/sqlmodel) by Sebastián Ramírez and its contributors. Our goal was to recreate SQLModel's elegant single-class API while achieving lower memory consumption and higher throughput by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
+SQLDataclass was born from combining two lines of work:
 
-The memory and runtime performance research that informed SQLDataclass's architecture was conducted by Marcel Spitz, Kai Habermann, and Christian Siebert — their work on benchmarking pydantic model representations (BaseModel vs dataclasses vs stdlib) established the empirical foundation for this project's design decisions.
+**[SQLModel](https://github.com/fastapi/sqlmodel)** by Sebastián Ramírez and its contributors provided the inspiration for the single-class API — one model definition that serves as both the database schema and the pydantic data model. SQLDataclass recreates this developer experience while targeting lower memory consumption by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
+
+**Prior research by Marcel Spitz, Kai Habermann, and Christian Siebert** on pydantic memory and runtime performance — conducted in a separate project with Lennart Jansen — established that pydantic dataclasses with `slots=True` achieve the same memory footprint as stdlib dataclasses while retaining full validation. These findings (12.8x less memory than BaseModel, 5.9x less than ORM instances) became the empirical foundation for SQLDataclass's architecture. The goal was to combine these results with SQLModel's ergonomics.
 
 ## Requirements
 
