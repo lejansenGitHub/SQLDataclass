@@ -161,6 +161,7 @@ class SAColumnInfo:
     primary_key: bool = False
     nullable: bool | None = None
     index: bool = False
+    column: bool = True
     unique: bool = False
     foreign_key: str | None = None
     sa_type: Any = None
@@ -232,6 +233,7 @@ def Field(  # noqa: PLR0913
     sa_type: Any = None,
     server_default: Any = None,
     sa_column_kwargs: dict[str, Any] | None = None,
+    column: bool = True,
     # Pydantic params (passed through)
     alias: str | None = None,
     title: str | None = None,
@@ -259,6 +261,7 @@ def Field(  # noqa: PLR0913
         sa_type=sa_type,
         server_default=server_default,
         sa_column_kwargs=sa_column_kwargs,
+        column=column,
     )
 
     pydantic_kwargs: dict[str, Any] = {
@@ -413,7 +416,7 @@ def _build_table(
 ) -> Table:
     """Create a SQLAlchemy ``Table`` from resolved type hints and field defaults.
 
-    Fields in *relationship_fields* are skipped (they are not database columns).
+    Fields in *relationship_fields* and fields with ``column=False`` are skipped.
     """
     columns: list[Column[Any]] = []
     for field_name, type_hint in resolved_hints.items():
@@ -423,6 +426,8 @@ def _build_table(
         sa_info: SAColumnInfo | None = None
         if isinstance(default_val, FieldInfo):
             sa_info = _get_sa_info(default_val)
+        if sa_info is not None and not sa_info.column:
+            continue
         columns.append(_build_sa_column(field_name, type_hint, sa_info))
 
     return Table(tablename, target_metadata, *columns)
@@ -1109,13 +1114,18 @@ def _build_sqldataclass(
     tablename = namespace.pop("__tablename__", _default_tablename(name))
     target_metadata = _find_metadata(bases)
 
-    # Detect relationship fields (not columns)
+    # Detect non-column fields: relationships and column=False
     relationship_fields: set[str] = set()
+    non_column_fields: set[str] = set()
     resolved_rels: dict[str, _ResolvedRelationship] = {}
     for field_name in annotations:
         default_val = namespace.get(field_name)
         if _is_relationship(default_val):
             relationship_fields.add(field_name)
+        elif isinstance(default_val, FieldInfo):
+            sa_info = _get_sa_info(default_val)
+            if sa_info is not None and not sa_info.column:
+                non_column_fields.add(field_name)
 
     # Build SA table before pydantic transforms the class
     sa_table: Table | None = None
@@ -1140,9 +1150,10 @@ def _build_sqldataclass(
     # Apply pydantic dataclass with slots for memory efficiency
     dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
 
-    # Attach SA table, relationships, and metadata
+    # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
     dc_cls.__relationships__ = resolved_rels
+    dc_cls.__non_column_fields__ = frozenset(non_column_fields)
     if sa_table is not None:
         dc_cls.__table__ = sa_table
         dc_cls.__tablename__ = tablename

@@ -33,7 +33,7 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | SQLAlchemy ORM `Session.query` | 2,112 | 193 ms | 3x more memory |
 | SQLModel `session.exec` | 2,423 | 195 ms | 3.4x more memory |
 
-SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic dataclass** (191ms vs 325ms) because it uses `validate_python` internally, bypassing the `__init__` wrapper overhead. It matches SQLAlchemy ORM speed while using **3x less memory**.
+Times include query execution + object construction (the full end-to-end cost of getting typed objects from the database). SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic dataclass** (191ms vs 325ms) because it uses `validate_python` internally, bypassing the `__init__` wrapper overhead. It matches SQLAlchemy ORM speed while using **3x less memory**.
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
@@ -434,6 +434,9 @@ class User(SQLDataclass, table=True):
     name: str = Field(min_length=1, max_length=100)
     age: int = Field(ge=0, le=200)
     team_id: int | None = Field(default=None, foreign_key="teams.id")
+    # Not stored in DB — only exists on the Python object
+    display_name: str = Field(default="", column=False)
+    is_cached: bool = Field(default=False, column=False)
 ```
 
 | Parameter | Type | Description |
@@ -448,6 +451,7 @@ class User(SQLDataclass, table=True):
 | `ge`, `le`, `gt`, `lt` | `float` | Pydantic numeric validators |
 | `min_length`, `max_length` | `int` | Pydantic string validators |
 | `pattern` | `str` | Pydantic regex pattern |
+| `column` | `bool` | `False` = field exists on Python object but not in DB |
 
 ## Relationship options
 

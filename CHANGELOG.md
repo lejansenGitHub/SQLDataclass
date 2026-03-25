@@ -2,6 +2,20 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.1.2] - 2026-03-25
+
+### Added
+- `Field(column=False)` — non-persistent fields that exist on the Python object but not in the database
+  ```python
+  class Hero(SQLDataclass, table=True):
+      id: int | None = Field(default=None, primary_key=True)
+      name: str
+      display_name: str = Field(default="", column=False)  # not in DB
+      is_cached: bool = Field(default=False, column=False)
+  ```
+- Non-column fields are validated by pydantic, present in `__init__`, but excluded from table creation, `insert()`, `to_dict()`, and `flatten_for_table()`
+- When loading from DB, non-column fields use their default values
+
 ## [0.1.1] - 2026-03-25
 
 ### Added
