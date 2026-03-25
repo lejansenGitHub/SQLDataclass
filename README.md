@@ -31,12 +31,36 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | SQLAlchemy ORM | 2,139 | 2.9x | 45 ms |
 | **SQLModel** | **2,451** | **3.3x** | **55 ms** |
 
+### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
+
+**Teams with heroes (one-to-many):**
+
+| Library | Memory | Load time | Notes |
+|---|---:|---:|---|
+| **SQLDataclass** | **7.1 MB** | 146 ms | Two-query strategy, no session |
+| SQLAlchemy ORM + joinedload | 8.1 MB | 20 ms | Faster via optimized JOIN, but needs session |
+
+**Heroes with team + tags (many-to-one + many-to-many):**
+
+| Library | Memory | Load time | Notes |
+|---|---:|---:|---|
+| SQLModel | 12.6 MB | 458 ms | Lazy loads require open session |
+| SQLAlchemy ORM + eager | 14.2 MB | 70 ms | Deduplicates via identity map |
+| SQLDataclass | 62 MB | 746 ms | No identity map = duplicate tag objects |
+
+### When to use what
+
+- **Simple/flat models** — SQLDataclass wins on both memory and speed (3-14x less memory)
+- **One-to-many** — SQLDataclass is competitive (similar memory, no session needed)
+- **Many-to-many with shared objects** — SQLAlchemy ORM's identity map deduplicates; SQLDataclass creates separate instances per reference. For read-heavy M2M workloads with high fan-out, SA ORM may use less memory.
+
 ### Why the difference?
 
 - SQLDataclass uses **pydantic dataclasses with `slots=True`** — no `__dict__`, minimal per-instance overhead
 - SQLModel inherits from both Pydantic BaseModel and SQLAlchemy ORM — each instance carries validation machinery AND ORM state tracking
-- SQLAlchemy ORM instances carry identity map, state tracking, and relationship loading machinery
+- SQLAlchemy ORM's identity map deduplicates objects (same row = same instance), which helps with many-to-many but adds overhead for simple queries
 - SQLDataclass queries via **SQLAlchemy Core** (raw result rows), not the ORM session
+- **Trade-off**: SQLDataclass prioritizes simplicity and flat-model performance over shared-reference deduplication
 
 ## Install
 
