@@ -33,12 +33,12 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
-**Teams with heroes (one-to-many):**
+**Teams with heroes (one-to-many, 100 teams + 5k heroes):**
 
 | Library | Memory | Load time | Notes |
 |---|---:|---:|---|
-| **SQLDataclass** | **7.1 MB** | 146 ms | Two-query strategy, no session |
-| SQLAlchemy ORM + joinedload | 8.1 MB | 20 ms | Faster via optimized JOIN, but needs session |
+| **SQLDataclass** | **1.2 MB** | **13 ms** | Two-query + back-ref stitching, no session |
+| SQLAlchemy ORM + joinedload | 8.1 MB | 19 ms | JOIN-based, needs session |
 
 **Heroes with team + tags (many-to-one + many-to-many):**
 
@@ -51,7 +51,7 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 ### When to use what
 
 - **Simple/flat models** — SQLDataclass wins on both memory and speed (3-14x less memory)
-- **One-to-many** — SQLDataclass is competitive (similar memory, no session needed)
+- **One-to-many** — SQLDataclass wins (6.7x less memory, faster, with automatic back-references)
 - **Many-to-many with shared objects** — SQLAlchemy ORM's identity map deduplicates; SQLDataclass creates separate instances per reference. For read-heavy M2M workloads with high fan-out, SA ORM may use less memory.
 
 ### Why the difference?
