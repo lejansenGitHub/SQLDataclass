@@ -18,19 +18,19 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | SQLAlchemy ORM | 1,690 | 132 ms |
 | SQLModel | 4,538 | 322 ms |
 
-### Database loading — SQLite (10k rows, 20 fields)
+### Database loading — PostgreSQL (10k rows, 20 fields)
 
 | Approach | B/row | Time | Notes |
 |---|---:|---:|---|
-| Raw SQL → dict | 1,007 | 37 ms | No type safety, baseline |
-| Raw SQL → stdlib dataclass | 735 | 50 ms | No validation |
-| Raw SQL → pydantic dataclass | 735 | 63 ms | Manual wiring |
-| **SQLDataclass `load_all`** | **752** | **47 ms** | **Full ORM, faster than manual** |
-| SA Core → pydantic dc (manual) | 735 | 63 ms | DIY bridge |
-| SQLAlchemy ORM `Session.query` | 2,142 | 49 ms | ORM overhead |
-| SQLModel `session.exec` | 2,454 | 52 ms | ORM + BaseModel overhead |
+| Raw SQL → dict | 955 | 149 ms | No type safety, baseline |
+| Raw SQL → stdlib dataclass | 683 | 168 ms | No validation |
+| Raw SQL → pydantic dataclass | 683 | 325 ms | Manual wiring, slow `__init__` |
+| **SQLDataclass `load_all`** | **709** | **191 ms** | **Full ORM, faster than manual pydantic** |
+| SA Core → pydantic dc (manual) | 688 | 316 ms | DIY bridge, same slow `__init__` |
+| SQLAlchemy ORM `Session.query` | 2,112 | 193 ms | 3x more memory |
+| SQLModel `session.exec` | 2,423 | 195 ms | 3.4x more memory |
 
-SQLDataclass's `load_all` is **faster than manually doing Raw SQL + pydantic dataclass** (47ms vs 63ms) because it uses `validate_python` internally, which bypasses the `__init__` wrapper overhead.
+SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic dataclass** (191ms vs 325ms) because it uses `validate_python` internally, bypassing the `__init__` wrapper overhead. It matches SQLAlchemy ORM speed while using **3x less memory**.
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
