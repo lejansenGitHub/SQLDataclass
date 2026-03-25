@@ -6,6 +6,9 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 
 ## Performance
 
+> All benchmarks run on PostgreSQL with 10,000 rows and 20 fields per row.
+> Reproducible via `src/sqldataclass/tests/performance_tests/`.
+
 ### Object construction (20 fields, 10k objects, no DB)
 
 | Approach | B/row | Time |
@@ -54,13 +57,24 @@ SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic d
 - **One-to-many** — SQLDataclass wins (6.7x less memory, faster, with automatic back-references)
 - **Many-to-many** — SQLDataclass wins (3.3x less memory, faster, PK-based deduplication)
 
+### Summary
+
+| Benchmark | vs SQLAlchemy ORM | vs SQLModel | vs manual Raw SQL + pydantic |
+|---|---|---|---|
+| **Flat model (memory)** | **3x less** | **3.4x less** | comparable |
+| **Flat model (speed)** | same speed | same speed | **40% faster** |
+| **One-to-many (memory)** | **6.7x less** | — | — |
+| **Many-to-many (memory)** | **3.3x less** | — | — |
+| **Object construction** | **5x less memory, 5x faster** | **14x less memory, 13x faster** | — |
+
 ### Why the difference?
 
-- SQLDataclass uses **pydantic dataclasses with `slots=True`** — no `__dict__`, minimal per-instance overhead
-- SQLModel inherits from both Pydantic BaseModel and SQLAlchemy ORM — each instance carries validation machinery AND ORM state tracking
-- SQLDataclass deduplicates M2M targets via PK cache (same tag = same instance), matching ORM's identity map benefit without the session overhead
-- SQLDataclass queries via **SQLAlchemy Core** (raw result rows), not the ORM session
-- **Result**: SQLDataclass wins across all relationship patterns — flat, one-to-many, and many-to-many
+- **`slots=True` pydantic dataclasses** — no `__dict__`, minimal per-instance overhead
+- **`validate_python` fast path** — bypasses pydantic's `__init__` wrapper, 40% faster than `cls(**row)`
+- **SQLAlchemy Core, not ORM** — no session, no identity map, no state tracking overhead
+- **PK-cached M2M deduplication** — same tag = same instance, matching ORM's identity map benefit
+- **Two-query collections** — one-to-many loaded via `WHERE fk IN (...)`, not expensive JOINs
+- **Back-reference stitching** — `hero.team = parent` set directly, zero extra queries
 
 ## Install
 
