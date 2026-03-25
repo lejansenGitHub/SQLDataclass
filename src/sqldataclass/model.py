@@ -910,12 +910,17 @@ def _load_many_to_many(  # noqa: PLR0913
     if order_by is not None and order_by in target_table.c:
         query = query.order_by(target_table.c[order_by])
 
+    # Cache targets by PK to deduplicate (e.g., 20 tags shared across 5000 heroes)
+    target_pk_name = target_pk.name
+    target_cache: dict[Any, Any] = {}
     targets_by_source: dict[Any, list[Any]] = {}
     for row in conn.execute(query).mappings():
         source_fk_val = row["__link_source_fk__"]
         target_data = _extract_prefixed(dict(row), "__target__")
-        target = target_type(**target_data)
-        targets_by_source.setdefault(source_fk_val, []).append(target)
+        pk_val = target_data.get(target_pk_name)
+        if pk_val not in target_cache:
+            target_cache[pk_val] = target_type(**target_data)
+        targets_by_source.setdefault(source_fk_val, []).append(target_cache[pk_val])
 
     for pk_val, parent_list in pk_to_parents.items():
         targets = targets_by_source.get(pk_val, [])

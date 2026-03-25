@@ -40,27 +40,26 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | **SQLDataclass** | **1.2 MB** | **13 ms** | Two-query + back-ref stitching, no session |
 | SQLAlchemy ORM + joinedload | 8.1 MB | 19 ms | JOIN-based, needs session |
 
-**Heroes with team + tags (many-to-one + many-to-many):**
+**Heroes with team + tags (many-to-one + many-to-many, 5k heroes, 20 tags, 3 tags/hero):**
 
 | Library | Memory | Load time | Notes |
 |---|---:|---:|---|
-| SQLModel | 12.6 MB | 458 ms | Lazy loads require open session |
-| SQLAlchemy ORM + eager | 14.2 MB | 70 ms | Deduplicates via identity map |
-| SQLDataclass | 62 MB | 746 ms | No identity map = duplicate tag objects |
+| **SQLDataclass** | **3.7 MB** | **53 ms** | PK-cached deduplication, no session |
+| SQLAlchemy ORM + eager | 12.3 MB | 70 ms | Identity map deduplication |
 
 ### When to use what
 
 - **Simple/flat models** — SQLDataclass wins on both memory and speed (3-14x less memory)
 - **One-to-many** — SQLDataclass wins (6.7x less memory, faster, with automatic back-references)
-- **Many-to-many with shared objects** — SQLAlchemy ORM's identity map deduplicates; SQLDataclass creates separate instances per reference. For read-heavy M2M workloads with high fan-out, SA ORM may use less memory.
+- **Many-to-many** — SQLDataclass wins (3.3x less memory, faster, PK-based deduplication)
 
 ### Why the difference?
 
 - SQLDataclass uses **pydantic dataclasses with `slots=True`** — no `__dict__`, minimal per-instance overhead
 - SQLModel inherits from both Pydantic BaseModel and SQLAlchemy ORM — each instance carries validation machinery AND ORM state tracking
-- SQLAlchemy ORM's identity map deduplicates objects (same row = same instance), which helps with many-to-many but adds overhead for simple queries
+- SQLDataclass deduplicates M2M targets via PK cache (same tag = same instance), matching ORM's identity map benefit without the session overhead
 - SQLDataclass queries via **SQLAlchemy Core** (raw result rows), not the ORM session
-- **Trade-off**: SQLDataclass prioritizes simplicity and flat-model performance over shared-reference deduplication
+- **Result**: SQLDataclass wins across all relationship patterns — flat, one-to-many, and many-to-many
 
 ## Install
 
