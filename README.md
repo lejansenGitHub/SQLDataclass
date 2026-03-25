@@ -435,7 +435,7 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | ~~No pagination in `load_all`~~ | **Fixed in v0.0.7** — `Hero.load_all(limit=10, offset=20)` |
 | ~~No nested relationship loading~~ | **Fixed in v0.1.0** — `hero.team.league` auto-loads recursively |
 | ~~No relationship ordering~~ | **Fixed in v0.0.8** — `Relationship(order_by="name")` |
-| ~~No single-table inheritance~~ | **Fixed in v0.1.1** — `class Car(Vehicle, inherit=True, ...)` |
+| ~~No single-table inheritance~~ | **Fixed in v0.1.1** — `class Car(Vehicle):` with `__discriminator__` |
 | ~~Composite PKs don't work with collection relationships~~ | **Fixed in v0.1.0** |
 | **No identity map** (by design) — loading the same row twice creates separate objects | Immutable dataclass pattern; cache at application level if needed |
 | ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |

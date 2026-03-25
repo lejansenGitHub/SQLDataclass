@@ -5,25 +5,31 @@ All notable changes to SQLDataclass will be documented in this file.
 ## [0.1.1] - 2026-03-25
 
 ### Added
-- **Single-table inheritance** via `inherit=True` on class definition
+- **Single-table inheritance** via `__discriminator__` on parent class
   ```python
   class Vehicle(SQLDataclass, table=True):
+      __discriminator__ = "type"
       id: int | None = Field(default=None, primary_key=True)
       type: str = ""
       name: str = ""
-      doors: int | None = None      # Car-specific
-      payload: float | None = None   # Truck-specific
 
-  class Car(Vehicle, inherit=True, discriminator_column="type", discriminator_value="car"):
-      pass
+  class Car(Vehicle):  # just inherit — no keywords needed
+      doors: int | None = None  # auto-added to Vehicle's table
 
-  class Truck(Vehicle, inherit=True, discriminator_column="type", discriminator_value="truck"):
-      pass
+  class Truck(Vehicle):
+      payload: float | None = None
   ```
-- Child shares parent's table, auto-filters queries by discriminator
-- `insert()` auto-sets discriminator value
+- Child-specific fields auto-appended as nullable columns to parent table
+- **Polymorphic loading**: `Vehicle.load_all()` returns `[Car(...), Truck(...)]`
+- Subtype auto-filtering: `Car.load_all()` only returns cars
+- `insert()` auto-sets discriminator value (defaults to lowercase class name)
 - `update()`/`delete()` scoped to subtype
+- Custom discriminator value via `__discriminator_value__`
 - Works with pagination (`limit`/`offset`)
+
+### Removed
+- Old `inherit=True, discriminator_column=, discriminator_value=` syntax
+  (replaced by cleaner `__discriminator__` approach)
 
 ### Fixed
 - Removed "No single-table inheritance" from known limitations

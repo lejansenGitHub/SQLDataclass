@@ -949,15 +949,12 @@ _BUILDING: set[str] = set()
 class SQLDataclassMeta(type):
     """Metaclass that transforms a class into a pydantic dataclass with an optional SA table."""
 
-    def __new__(  # noqa: PLR0913
+    def __new__(
         mcs,
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002
-        inherit: bool = False,  # noqa: FBT001, FBT002
-        discriminator_column: str | None = None,
-        discriminator_value: str | None = None,
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -966,9 +963,10 @@ class SQLDataclassMeta(type):
             cls.metadata = MetaData()  # type: ignore[attr-defined]
             return cls
 
-        # Single-table inheritance: child shares parent's table with auto-filter
-        if inherit:
-            inherited: type = _build_inherited(mcs, name, bases, namespace, discriminator_column, discriminator_value)
+        # Single-table inheritance: auto-detect if parent has __discriminator__
+        sti_parent = _find_sti_parent(bases)
+        if sti_parent is not None and not table:
+            inherited: type = _build_sti_child(mcs, name, bases, namespace, sti_parent)
             return inherited
 
         # Re-entry guard: pydantic_dataclass with slots=True internally calls
@@ -985,50 +983,70 @@ class SQLDataclassMeta(type):
             _BUILDING.discard(qualname)
 
 
-def _build_inherited(  # noqa: PLR0913
+_STI_REGISTRY: dict[str, dict[str, Any]] = {}
+"""Maps parent tablename → {discriminator_value: child_class}."""
+
+
+def _find_sti_parent(bases: tuple[type, ...]) -> Any | None:
+    """Return the parent class if it has __discriminator__ (STI base)."""
+    for base in bases:
+        if getattr(base, "__discriminator__", None) is not None:
+            return base
+    return None
+
+
+def _build_sti_child(  # noqa: PLR0915
     mcs: type,
     name: str,
     bases: tuple[type, ...],
     namespace: dict[str, Any],
-    discriminator_column: str | None,
-    discriminator_value: str | None,
+    parent: Any,
 ) -> Any:
     """Build a single-table inheritance child class.
 
-    The child shares the parent's ``__table__`` but auto-filters queries by
-    ``discriminator_column = discriminator_value`` and auto-sets the discriminator
-    on insert.
+    The child:
+    - Shares the parent's ``__table__``
+    - Appends its new fields as nullable columns to the parent table
+    - Auto-filters queries by discriminator value
+    - Auto-sets discriminator on insert
     """
-    # Find the parent SQLDataclass table model
-    parent: Any = None
-    for base in bases:
-        if hasattr(base, "__sqldataclass_is_table__") and base.__sqldataclass_is_table__:
-            parent = base
-            break
+    discriminator_column: str = parent.__discriminator__
+    discriminator_value: str = namespace.pop(
+        "__discriminator_value__",
+        name.lower(),
+    )
 
-    if parent is None:
-        msg = f"inherit=True requires a parent SQLDataclass table model, got bases={bases}"
-        raise TypeError(msg)
+    # Append child-specific columns to parent table
+    child_annotations = namespace.get("__annotations__", {})
+    parent_table: Table = parent.__table__
+    existing_col_names = {c.name for c in parent_table.columns}
 
-    if discriminator_column is None or discriminator_value is None:
-        msg = "inherit=True requires discriminator_column and discriminator_value"
-        raise TypeError(msg)
+    for field_name, type_hint in child_annotations.items():
+        if field_name in existing_col_names:
+            continue  # already on parent table
+        if _is_relationship(namespace.get(field_name)):
+            continue  # not a column
+        try:
+            col = _build_sa_column(field_name, type_hint, None)
+            # Force nullable since not all subtypes have this column
+            col.nullable = True
+            parent_table.append_column(col)
+        except TypeError:
+            pass  # unmappable type, skip
 
-    # Build the child as a pydantic dataclass that shares the parent's table
+    # Build pydantic dataclass: merge parent + child fields
     qualname = f"{namespace.get('__module__', '')}.{name}"
     _BUILDING.add(qualname)
     try:
-        # Merge parent annotations with child annotations (child can override)
         parent_annotations: dict[str, Any] = {}
         if hasattr(parent, "__pydantic_fields__"):
             for field_name, field_info in parent.__pydantic_fields__.items():
                 parent_annotations[field_name] = field_info.annotation
 
-        child_annotations = namespace.get("__annotations__", {})
         merged_annotations = {**parent_annotations, **child_annotations}
         namespace["__annotations__"] = merged_annotations
 
-        # Copy parent field defaults for fields not overridden by child
+        # Copy parent defaults for fields not overridden by child
         for field_name in parent_annotations:
             if field_name not in namespace and hasattr(parent, "__pydantic_fields__"):
                 pfield = parent.__pydantic_fields__[field_name]
@@ -1037,7 +1055,6 @@ def _build_inherited(  # noqa: PLR0913
                 elif pfield.default_factory is not None:
                     namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
 
-        # Remove parent from bases to avoid metaclass conflict
         clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
         cls: Any = type.__new__(mcs, name, clean_bases, namespace)
         dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
@@ -1047,6 +1064,7 @@ def _build_inherited(  # noqa: PLR0913
     # Share parent's table and metadata
     dc_cls.__table__ = parent.__table__
     dc_cls.__tablename__ = parent.__tablename__
+    dc_cls.__discriminator__ = discriminator_column
     dc_cls.__sqldataclass_is_table__ = True
     dc_cls.__sqldataclass_inherit__ = True
     dc_cls.__sqldataclass_discriminator_column__ = discriminator_column
@@ -1055,9 +1073,17 @@ def _build_inherited(  # noqa: PLR0913
     dc_cls.metadata = getattr(parent, "metadata", MetaData())
     dc_cls.c = parent.__table__.c
 
-    # Attach convenience methods with auto-filter
+    # Register subtype for polymorphic loading
+    parent_key = parent.__tablename__
+    _STI_REGISTRY.setdefault(parent_key, {})[discriminator_value] = dc_cls
+
+    # Store registry ref on parent for polymorphic load_all
+    if not hasattr(parent, "__sqldataclass_sti_registry__"):
+        parent.__sqldataclass_sti_registry__ = _STI_REGISTRY[parent_key]
+        parent.__sqldataclass_sti_column__ = discriminator_column
+
     _attach_convenience_methods(dc_cls)
-    _MODEL_REGISTRY[f"{parent.__tablename__}__{discriminator_value}"] = dc_cls
+    _MODEL_REGISTRY[f"{parent_key}__{discriminator_value}"] = dc_cls
 
     return dc_cls
 
@@ -1157,6 +1183,24 @@ def _get_engine(cls: Any) -> Engine:
 # ---------------------------------------------------------------------------
 
 
+def _polymorphic_load[T](conn: Connection, query: Any, cls: type[T]) -> list[T]:
+    """Load rows, constructing the correct STI subtype for each row if applicable."""
+    sti_registry = getattr(cls, "__sqldataclass_sti_registry__", None)
+    sti_column = getattr(cls, "__sqldataclass_sti_column__", None)
+
+    if sti_registry is None or sti_column is None:
+        # No STI — just construct cls for every row
+        return _load_all(conn, query, cls)
+
+    # Polymorphic: pick the right subtype per row
+    results: list[T] = []
+    for row in conn.execute(query).mappings():
+        disc_value = row.get(sti_column)
+        target_cls = sti_registry.get(disc_value, cls)
+        results.append(target_cls(**row))
+    return results
+
+
 def _apply_discriminator_filter(klass: Any, where: Any) -> Any:
     """If klass is an inherited subtype, prepend the discriminator filter."""
     if not getattr(klass, "__sqldataclass_inherit__", False):
@@ -1227,7 +1271,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             if order_by is not None:
                 query = query.order_by(order_by)
             query = _apply_pagination(query)
-            return _load_all(conn, query, klass)
+            return _polymorphic_load(conn, query, klass)
 
         _populate_collections(klass, results, conn)
         _populate_nested(results, conn, _depth=0)
