@@ -82,6 +82,7 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.types import TypeEngine
 
+from sqldataclass.query import _fast_construct
 from sqldataclass.query import fetch_one as _fetch_one
 from sqldataclass.query import load_all as _load_all
 from sqldataclass.write import flatten_for_table as _flatten_for_table
@@ -570,7 +571,7 @@ def _hydrate_discriminated(
     disc_key: str = rel.discriminator  # type: ignore[assignment]
     if disc_key not in nested:
         nested[disc_key] = disc_value
-    return active_type(**nested)
+    return _fast_construct(active_type, nested)
 
 
 def _find_active_variant(variants: list[Any], discriminator: str, disc_value: Any) -> Any:
@@ -593,7 +594,7 @@ def _hydrate_many_to_one(row_dict: dict[str, Any], rel: _ResolvedRelationship) -
     prefix = f"__{rel.field_name}__{target_table.name}__"
     nested = _extract_prefixed(row_dict, prefix)
     if nested and any(v is not None for v in nested.values()):
-        return target_type(**nested)
+        return _fast_construct(target_type, nested)
     return None
 
 
@@ -612,7 +613,7 @@ def _hydrate_row(cls: Any, row: Any) -> Any:
         else:
             base_data[field_name] = _hydrate_many_to_one(row_dict, rel)
 
-    return cls(**base_data)
+    return _fast_construct(cls, base_data)
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +637,14 @@ def _get_pk_value(obj: Any, pk_names: list[str]) -> Any:
 
 def _find_fk_column(child_table: Table, parent_table: Table) -> Column[Any] | None:
     """Find the FK column on child_table that references parent_table."""
+    # Fast path: check model registry for cached FK map
+    child_cls = _MODEL_REGISTRY.get(child_table.name)
+    if child_cls is not None:
+        fk_map: dict[str, Any] = getattr(child_cls, "__fk_map__", {})
+        cached: Column[Any] | None = fk_map.get(parent_table.name)
+        if cached is not None:
+            return cached
+    # Slow path: scan columns
     for col in child_table.columns:
         for fk in col.foreign_keys:
             if fk.column.table is parent_table:
@@ -663,7 +672,9 @@ def _resolve_forward_ref(tp: Any) -> Any:
 
 
 def _ensure_resolved(rel: _ResolvedRelationship) -> None:
-    """Resolve any string forward references in target_types."""
+    """Resolve any string forward references in target_types (cached after first call)."""
+    if all(not isinstance(t, str) for t in rel.target_types):
+        return  # already resolved
     rel.target_types = [_resolve_forward_ref(t) for t in rel.target_types]
 
 
@@ -693,10 +704,12 @@ def _populate_collections(  # noqa: PLR0912
     parent_table: Table = cls.__table__
     pk_cols = _get_pk_columns(cls)
     pk_names = [c.name for c in pk_cols]
-    parent_pks = [_get_pk_value(p, pk_names) for p in parents]
+    parent_pks: list[Any] = []
     pk_to_parents: dict[Any, list[Any]] = {}
     for p in parents:
-        pk_to_parents.setdefault(_get_pk_value(p, pk_names), []).append(p)
+        pk_val = _get_pk_value(p, pk_names)
+        parent_pks.append(pk_val)
+        pk_to_parents.setdefault(pk_val, []).append(p)
 
     all_loaded_children: list[Any] = []
 
@@ -780,7 +793,7 @@ def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection)
         query = sa_select(target_table).where(target_pk.in_(fk_values))
         targets_by_pk: dict[Any, Any] = {}
         for row in conn.execute(query).mappings():
-            target = target_type(**row)
+            target = _fast_construct(target_type, dict(row))
             targets_by_pk[row[target_pk.name]] = target
 
         # Assign to objects
@@ -814,21 +827,16 @@ def _populate_scalar_chains(objects: list[Any], conn: Connection, *, _depth: int
             target_type = rel.target_types[0]
             if not hasattr(target_type, "__table__"):
                 continue
-            # Check if any nested scalar is None and needs loading
-            needs_load = any(
-                getattr(inst, rel.field_name, None) is None
-                for inst in instances
-            )
-            if not needs_load:
-                # Nested objects already loaded — recurse into them
-                nested = [getattr(i, rel.field_name) for i in instances if getattr(i, rel.field_name) is not None]
-                if nested:
-                    _populate_scalar_chains(nested, conn, _depth=_depth + 1)
-                continue
+            # Single pass: collect nested values and check if any need loading
+            fname = rel.field_name
+            nested_values = [getattr(inst, fname, None) for inst in instances]
+            needs_load = any(v is None for v in nested_values)
 
-            # Load missing scalar relationships via batch query
-            _reload_scalar_relationships(instances, cls, conn)
-            nested = [getattr(i, rel.field_name) for i in instances if getattr(i, rel.field_name) is not None]
+            if needs_load:
+                _reload_scalar_relationships(instances, cls, conn)
+                nested_values = [getattr(inst, fname, None) for inst in instances]
+
+            nested = [v for v in nested_values if v is not None]
             if nested:
                 _populate_scalar_chains(nested, conn, _depth=_depth + 1)
 
@@ -854,7 +862,7 @@ def _load_one_to_many(  # noqa: PLR0913
         query = query.order_by(child_table.c[order_by])
     children_by_fk: dict[Any, list[Any]] = {}
     for row in conn.execute(query).mappings():
-        child = child_type(**row)
+        child = _fast_construct(child_type, dict(row))
         fk_value = row[fk_col.name]
         children_by_fk.setdefault(fk_value, []).append(child)
 
@@ -919,7 +927,7 @@ def _load_many_to_many(  # noqa: PLR0913
         target_data = _extract_prefixed(dict(row), "__target__")
         pk_val = target_data.get(target_pk_name)
         if pk_val not in target_cache:
-            target_cache[pk_val] = target_type(**target_data)
+            target_cache[pk_val] = _fast_construct(target_type, target_data)
         targets_by_source.setdefault(source_fk_val, []).append(target_cache[pk_val])
 
     for pk_val, parent_list in pk_to_parents.items():
@@ -1140,6 +1148,16 @@ def _build_sqldataclass(
         dc_cls.__tablename__ = tablename
         dc_cls.metadata = target_metadata
         dc_cls.c = sa_table.c
+        # Pre-compute FK map for fast lookups: {target_table_name: fk_column}
+        # Wrapped in try/except because FK targets may not exist yet (forward refs)
+        fk_map: dict[str, Column[Any]] = {}
+        for col in sa_table.columns:
+            for fk in col.foreign_keys:
+                try:
+                    fk_map[fk.column.table.name] = col
+                except Exception:
+                    pass  # target table not yet created, will use slow path
+        dc_cls.__fk_map__ = fk_map
         _attach_convenience_methods(dc_cls)
         # Register for forward reference resolution
         _MODEL_REGISTRY[tablename] = dc_cls
@@ -1288,7 +1306,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             flat_row = _fetch_one(conn, query)
             if flat_row is None:
                 return None
-            result = klass(**flat_row)
+            result = _fast_construct(klass, flat_row)
         else:
             query = sa_select(klass.__table__)
             if where is not None:
@@ -1296,7 +1314,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             flat_row = _fetch_one(conn, query)
             if flat_row is None:
                 return None
-            return klass(**flat_row)
+            return _fast_construct(klass, flat_row)
 
         _populate_collections(klass, [result], conn)
         _populate_scalar_chains([result], conn, _depth=0)
