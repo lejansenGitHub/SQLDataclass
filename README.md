@@ -33,7 +33,6 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | SA Core → pydantic dc (manual) | 688 | 316 ms | DIY bridge, same slow `__init__` |
 | SQLAlchemy ORM `Session.query` | 2,112 | 193 ms | 3x more memory |
 | SQLModel (tiangolo) `session.exec` | 2,423 | 195 ms | 3.4x more memory |
-| SQLDataclass `SQLModel` `load_all` | ~2,900 | ~191 ms | BaseModel API, same speed, `__dict__` overhead |
 
 Times include query execution + object construction (the full end-to-end cost of getting typed objects from the database). SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic dataclass** (191ms vs 325ms) because it uses `validate_python` internally, bypassing the `__init__` wrapper overhead. It matches SQLAlchemy ORM speed while using **3x less memory**.
 
@@ -69,7 +68,7 @@ Times include query execution + object construction (the full end-to-end cost of
 | **Many-to-many (memory)** | **3.3x less** | — | — |
 | **Object construction** | **5x less memory, 5x faster** | **14x less memory, 13x faster** | — |
 
-> **SQLDataclass vs SQLDataclass `SQLModel`**: `SQLDataclass` (pydantic dataclass with `slots=True`) uses **~9x less memory** per object than `SQLModel` (Pydantic BaseModel). This is an inherent `BaseModel` limitation — it stores fields in `__dict__` (536 bytes/instance for 20 fields) while `slots=True` dataclasses use fixed slots (208 bytes). DB loading speed is identical. Use `SQLDataclass` for performance-critical paths; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
+> **SQLDataclass vs SQLDataclass `SQLModel`**: `SQLDataclass` (pydantic dataclass with `slots=True`) uses **~9x less memory** per object than `SQLModel` (Pydantic BaseModel). This is an inherent `BaseModel` limitation — it stores fields in `__dict__` (536 bytes/instance for 20 fields) while `slots=True` dataclasses use fixed slots (208 bytes). Our `SQLModel` matches plain BaseModel memory exactly (2,913 B/row) and is **1.6x lighter than tiangolo's SQLModel** (4,538 B/row) because we skip the SA ORM instrumentation (`_sa_instance_state`). DB loading speed is identical. Use `SQLDataclass` for performance-critical paths; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
 
 ### Why the difference?
 
