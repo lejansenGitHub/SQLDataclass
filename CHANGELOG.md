@@ -2,6 +2,32 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.1.1] - 2026-03-25
+
+### Added
+- **Single-table inheritance** via `inherit=True` on class definition
+  ```python
+  class Vehicle(SQLDataclass, table=True):
+      id: int | None = Field(default=None, primary_key=True)
+      type: str = ""
+      name: str = ""
+      doors: int | None = None      # Car-specific
+      payload: float | None = None   # Truck-specific
+
+  class Car(Vehicle, inherit=True, discriminator_column="type", discriminator_value="car"):
+      pass
+
+  class Truck(Vehicle, inherit=True, discriminator_column="type", discriminator_value="truck"):
+      pass
+  ```
+- Child shares parent's table, auto-filters queries by discriminator
+- `insert()` auto-sets discriminator value
+- `update()`/`delete()` scoped to subtype
+- Works with pagination (`limit`/`offset`)
+
+### Fixed
+- Removed "No single-table inheritance" from known limitations
+
 ## [0.1.0] - 2026-03-24
 
 ### Added

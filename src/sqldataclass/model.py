@@ -55,6 +55,7 @@ from uuid import UUID
 from pydantic import Field as PydanticField
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 from sqlalchemy import (
     Boolean,
     Column,
@@ -948,12 +949,15 @@ _BUILDING: set[str] = set()
 class SQLDataclassMeta(type):
     """Metaclass that transforms a class into a pydantic dataclass with an optional SA table."""
 
-    def __new__(
+    def __new__(  # noqa: PLR0913
         mcs,
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002
+        inherit: bool = False,  # noqa: FBT001, FBT002
+        discriminator_column: str | None = None,
+        discriminator_value: str | None = None,
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -961,6 +965,11 @@ class SQLDataclassMeta(type):
             cls = super().__new__(mcs, name, bases, namespace)
             cls.metadata = MetaData()  # type: ignore[attr-defined]
             return cls
+
+        # Single-table inheritance: child shares parent's table with auto-filter
+        if inherit:
+            inherited: type = _build_inherited(mcs, name, bases, namespace, discriminator_column, discriminator_value)
+            return inherited
 
         # Re-entry guard: pydantic_dataclass with slots=True internally calls
         # type(cls)(name, bases, ns) which re-enters this metaclass.
@@ -974,6 +983,83 @@ class SQLDataclassMeta(type):
             return result
         finally:
             _BUILDING.discard(qualname)
+
+
+def _build_inherited(  # noqa: PLR0913
+    mcs: type,
+    name: str,
+    bases: tuple[type, ...],
+    namespace: dict[str, Any],
+    discriminator_column: str | None,
+    discriminator_value: str | None,
+) -> Any:
+    """Build a single-table inheritance child class.
+
+    The child shares the parent's ``__table__`` but auto-filters queries by
+    ``discriminator_column = discriminator_value`` and auto-sets the discriminator
+    on insert.
+    """
+    # Find the parent SQLDataclass table model
+    parent: Any = None
+    for base in bases:
+        if hasattr(base, "__sqldataclass_is_table__") and base.__sqldataclass_is_table__:
+            parent = base
+            break
+
+    if parent is None:
+        msg = f"inherit=True requires a parent SQLDataclass table model, got bases={bases}"
+        raise TypeError(msg)
+
+    if discriminator_column is None or discriminator_value is None:
+        msg = "inherit=True requires discriminator_column and discriminator_value"
+        raise TypeError(msg)
+
+    # Build the child as a pydantic dataclass that shares the parent's table
+    qualname = f"{namespace.get('__module__', '')}.{name}"
+    _BUILDING.add(qualname)
+    try:
+        # Merge parent annotations with child annotations (child can override)
+        parent_annotations: dict[str, Any] = {}
+        if hasattr(parent, "__pydantic_fields__"):
+            for field_name, field_info in parent.__pydantic_fields__.items():
+                parent_annotations[field_name] = field_info.annotation
+
+        child_annotations = namespace.get("__annotations__", {})
+        merged_annotations = {**parent_annotations, **child_annotations}
+        namespace["__annotations__"] = merged_annotations
+
+        # Copy parent field defaults for fields not overridden by child
+        for field_name in parent_annotations:
+            if field_name not in namespace and hasattr(parent, "__pydantic_fields__"):
+                pfield = parent.__pydantic_fields__[field_name]
+                if pfield.default is not PydanticUndefined:
+                    namespace[field_name] = pfield.default
+                elif pfield.default_factory is not None:
+                    namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
+
+        # Remove parent from bases to avoid metaclass conflict
+        clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
+        cls: Any = type.__new__(mcs, name, clean_bases, namespace)
+        dc_cls: Any = pydantic_dataclass(cls, slots=True, kw_only=True)
+    finally:
+        _BUILDING.discard(qualname)
+
+    # Share parent's table and metadata
+    dc_cls.__table__ = parent.__table__
+    dc_cls.__tablename__ = parent.__tablename__
+    dc_cls.__sqldataclass_is_table__ = True
+    dc_cls.__sqldataclass_inherit__ = True
+    dc_cls.__sqldataclass_discriminator_column__ = discriminator_column
+    dc_cls.__sqldataclass_discriminator_value__ = discriminator_value
+    dc_cls.__relationships__ = getattr(parent, "__relationships__", {})
+    dc_cls.metadata = getattr(parent, "metadata", MetaData())
+    dc_cls.c = parent.__table__.c
+
+    # Attach convenience methods with auto-filter
+    _attach_convenience_methods(dc_cls)
+    _MODEL_REGISTRY[f"{parent.__tablename__}__{discriminator_value}"] = dc_cls
+
+    return dc_cls
 
 
 def _find_metadata(bases: tuple[type, ...]) -> MetaData:
@@ -1071,6 +1157,26 @@ def _get_engine(cls: Any) -> Engine:
 # ---------------------------------------------------------------------------
 
 
+def _apply_discriminator_filter(klass: Any, where: Any) -> Any:
+    """If klass is an inherited subtype, prepend the discriminator filter."""
+    if not getattr(klass, "__sqldataclass_inherit__", False):
+        return where
+    col_name = klass.__sqldataclass_discriminator_column__
+    col_val = klass.__sqldataclass_discriminator_value__
+    disc_filter = klass.__table__.c[col_name] == col_val
+    if where is not None:
+        return disc_filter & where
+    return disc_filter
+
+
+def _apply_discriminator_on_insert(klass: Any, flat: dict[str, Any]) -> dict[str, Any]:
+    """If klass is an inherited subtype, set the discriminator value on insert."""
+    if not getattr(klass, "__sqldataclass_inherit__", False):
+        return flat
+    flat[klass.__sqldataclass_discriminator_column__] = klass.__sqldataclass_discriminator_value__
+    return flat
+
+
 def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
     """Attach query/write convenience methods to a table class."""
 
@@ -1090,6 +1196,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
 
         If *conn* is ``None``, auto-creates a connection from the bound engine.
         """
+        where = _apply_discriminator_filter(klass, where)
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
                 return _model_load_all(klass, auto_conn, where=where, order_by=order_by, limit=limit, offset=offset)
@@ -1128,6 +1235,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
 
     def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:
         """Load a single row, or ``None`` if not found."""
+        where = _apply_discriminator_filter(klass, where)
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
                 return _model_load_one(klass, auto_conn, where=where)
@@ -1179,7 +1287,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             with _get_engine(type(self)).begin() as auto_conn:
                 _model_insert(self, auto_conn)
                 return
-        flat = _flatten_for_table(self)
+        flat = _apply_discriminator_on_insert(type(self), _flatten_for_table(self))
         _insert_row(conn, type(self), flat)
 
     def _model_upsert(self: Any, conn: Connection | None = None, *, index_elements: list[str]) -> None:
@@ -1193,6 +1301,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
 
     def _model_update(klass: Any, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int:
         """Update rows matching *where* with *values*. Returns number of rows updated."""
+        where = _apply_discriminator_filter(klass, where)
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
                 return _model_update(klass, values, auto_conn, where=where)
@@ -1204,6 +1313,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
 
     def _model_delete(klass: Any, conn: Connection | None = None, where: Any = None) -> int:
         """Delete rows matching *where*. Returns number of rows deleted."""
+        where = _apply_discriminator_filter(klass, where)
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
                 return _model_delete(klass, auto_conn, where=where)
