@@ -17,9 +17,9 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | stdlib dataclass (`slots=True`) | 305 | 8 ms |
 | pydantic dataclass (`slots=True`) | 305 | 37 ms |
 | **SQLDataclass** | **321** | **24 ms** |
-| **SQLDataclass `SQLModel`** | **2,913** | **24 ms** |
-| Pydantic BaseModel | 2,913 | 24 ms |
 | SQLAlchemy ORM | 1,690 | 132 ms |
+| Pydantic BaseModel | 2,913 | 24 ms |
+| **SQLDataclass `SQLModel`** | **2,913** | **24 ms** |
 | SQLModel (tiangolo) | 4,538 | 322 ms |
 
 ### Database loading — PostgreSQL (10k rows, 20 fields)
@@ -30,10 +30,10 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 | Raw SQL → stdlib dataclass | 683 | 168 ms | No validation |
 | Raw SQL → pydantic dataclass | 683 | 325 ms | Manual wiring, slow `__init__` |
 | **SQLDataclass `load_all`** | **709** | **191 ms** | **Full ORM, faster than manual pydantic** |
-| **SQLDataclass `SQLModel` `load_all`** | **~2,900** | **~191 ms** | **BaseModel API, same speed** |
 | SA Core → pydantic dc (manual) | 688 | 316 ms | DIY bridge, same slow `__init__` |
 | SQLAlchemy ORM `Session.query` | 2,112 | 193 ms | 3x more memory |
 | SQLModel (tiangolo) `session.exec` | 2,423 | 195 ms | 3.4x more memory |
+| SQLDataclass `SQLModel` `load_all` | ~2,900 | ~191 ms | BaseModel API, same speed, `__dict__` overhead |
 
 Times include query execution + object construction (the full end-to-end cost of getting typed objects from the database). SQLDataclass `load_all` is **40% faster than manually doing Raw SQL + pydantic dataclass** (191ms vs 325ms) because it uses `validate_python` internally, bypassing the `__init__` wrapper overhead. It matches SQLAlchemy ORM speed while using **3x less memory**.
 
@@ -69,7 +69,7 @@ Times include query execution + object construction (the full end-to-end cost of
 | **Many-to-many (memory)** | **3.3x less** | — | — |
 | **Object construction** | **5x less memory, 5x faster** | **14x less memory, 13x faster** | — |
 
-> **SQLDataclass vs SQLDataclass `SQLModel`**: `SQLDataclass` (pydantic dataclass with `slots=True`) uses ~3x less memory per object than `SQLModel` (Pydantic BaseModel). DB loading speed is identical — both use the fast `validate_python`/`model_construct` path. Use `SQLDataclass` when memory is critical; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
+> **SQLDataclass vs SQLDataclass `SQLModel`**: `SQLDataclass` (pydantic dataclass with `slots=True`) uses **~9x less memory** per object than `SQLModel` (Pydantic BaseModel). This is an inherent `BaseModel` limitation — it stores fields in `__dict__` (536 bytes/instance for 20 fields) while `slots=True` dataclasses use fixed slots (208 bytes). DB loading speed is identical. Use `SQLDataclass` for performance-critical paths; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
 
 ### Why the difference?
 
