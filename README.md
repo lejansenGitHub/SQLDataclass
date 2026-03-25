@@ -6,30 +6,31 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 
 ## Performance
 
-### Object construction (20 fields, 10k objects)
+### Object construction (20 fields, 10k objects, no DB)
 
-| Library | B/row | vs SQLDataclass | Construction time |
-|---|---:|---:|---:|
-| **SQLDataclass** | **322** | **1.0x** | **25 ms** |
-| Pydantic BaseModel | 792 | 2.5x | 10 ms |
-| SQLAlchemy ORM | 1,699 | **5.3x** | 129 ms |
-| **SQLModel** | **4,549** | **14.1x** | **315 ms** |
+| Approach | B/row | Time |
+|---|---:|---:|
+| dict | 577 | 4 ms |
+| stdlib dataclass (`slots=True`) | 305 | 8 ms |
+| pydantic dataclass (`slots=True`) | 305 | 37 ms |
+| **SQLDataclass** | **321** | **24 ms** |
+| Pydantic BaseModel | 2,913 | 24 ms |
+| SQLAlchemy ORM | 1,690 | 132 ms |
+| SQLModel | 4,538 | 322 ms |
 
 ### Database loading — SQLite (10k rows, 20 fields)
 
-| Library | B/row | vs SQLDataclass | Load time |
-|---|---:|---:|---:|
-| **SQLDataclass** | **752** | **1.0x** | **57 ms** |
-| SQLAlchemy ORM | 2,142 | 2.9x | 47 ms |
-| **SQLModel** | **2,454** | **3.3x** | **56 ms** |
+| Approach | B/row | Time | Notes |
+|---|---:|---:|---|
+| Raw SQL → dict | 1,007 | 37 ms | No type safety, baseline |
+| Raw SQL → stdlib dataclass | 735 | 50 ms | No validation |
+| Raw SQL → pydantic dataclass | 735 | 63 ms | Manual wiring |
+| **SQLDataclass `load_all`** | **752** | **47 ms** | **Full ORM, faster than manual** |
+| SA Core → pydantic dc (manual) | 735 | 63 ms | DIY bridge |
+| SQLAlchemy ORM `Session.query` | 2,142 | 49 ms | ORM overhead |
+| SQLModel `session.exec` | 2,454 | 52 ms | ORM + BaseModel overhead |
 
-### Database loading — PostgreSQL (10k rows, 20 fields)
-
-| Library | B/row | vs SQLDataclass | Load time |
-|---|---:|---:|---:|
-| **SQLDataclass** | **748** | **1.0x** | **57 ms** |
-| SQLAlchemy ORM | 2,139 | 2.9x | 45 ms |
-| **SQLModel** | **2,451** | **3.3x** | **55 ms** |
+SQLDataclass's `load_all` is **faster than manually doing Raw SQL + pydantic dataclass** (47ms vs 63ms) because it uses `validate_python` internally, which bypasses the `__init__` wrapper overhead.
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
