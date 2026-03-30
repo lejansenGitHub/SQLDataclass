@@ -24,6 +24,11 @@ from sqldataclass.write import (
     upsert_row,
 )
 
+try:
+    from sqldataclass.annotations import Np  # noqa: F401
+except ImportError:  # numpy not installed
+    pass
+
 __all__ = [
     "Base",
     "CyFunctionDetector",
