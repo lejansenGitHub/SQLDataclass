@@ -81,7 +81,6 @@ class SQLModel(pydantic.BaseModel):
         cls.__sqldataclass_is_table__ = table
         cls.__relationships__ = {}
         cls.__non_column_fields__ = frozenset()
-        cls.__json_exclude_fields__ = frozenset()
         cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]
 
     @classmethod
@@ -101,24 +100,19 @@ class SQLModel(pydantic.BaseModel):
         # Find metadata from class hierarchy
         target_metadata = cls.metadata
 
-        # Detect non-column fields, json-excluded fields, and relationships
+        # Detect non-column fields and relationships
         # For BaseModel, the FieldInfo itself carries the metadata (not the default)
         relationship_fields: set[str] = set()
         non_column_fields: set[str] = set()
-        json_exclude_fields: set[str] = set()
         for field_name, field_info in cls.model_fields.items():
             if _is_relationship(field_info):
                 relationship_fields.add(field_name)
             else:
                 sa_info = _get_sa_info(field_info)
-                if sa_info is not None:
-                    if not sa_info.column:
-                        non_column_fields.add(field_name)
-                    if not sa_info.json:
-                        json_exclude_fields.add(field_name)
+                if sa_info is not None and not sa_info.column:
+                    non_column_fields.add(field_name)
 
         cls.__non_column_fields__ = frozenset(non_column_fields)
-        cls.__json_exclude_fields__ = frozenset(json_exclude_fields)
 
         # Resolve type hints — only include instance fields (exclude ClassVar)
         try:
@@ -168,11 +162,11 @@ class SQLModel(pydantic.BaseModel):
     def dump(self) -> dict[str, Any]:
         """Serialize to a dict suitable for JSON.
 
-        Excludes relationship fields and ``json=False`` fields.
+        Excludes relationship fields and ``column=False`` fields.
         """
-        json_exclude: frozenset[str] = getattr(type(self), "__json_exclude_fields__", frozenset())
+        non_col: frozenset[str] = getattr(type(self), "__non_column_fields__", frozenset())
         rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
-        exclude = json_exclude | rel_keys
+        exclude = non_col | rel_keys
         result = self.model_dump(warnings="error", by_alias=True, mode="json")
         if exclude:
             for key in exclude:
@@ -213,7 +207,6 @@ class SQLModel(pydantic.BaseModel):
         __sqlmodel_is_basemodel__: ClassVar[bool]
         __relationships__: ClassVar[dict[str, _ResolvedRelationship]]
         __non_column_fields__: ClassVar[frozenset[str]]
-        __json_exclude_fields__: ClassVar[frozenset[str]]
         c: ClassVar[Any]
 
         @classmethod

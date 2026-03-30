@@ -1,6 +1,8 @@
-"""Unit tests for load(), dump(), clone() and Field(json=False)."""
+"""Unit tests for load(), dump(), clone() and column=False field scoping."""
 
 from __future__ import annotations
+
+import pytest
 
 from sqldataclass import Field, SQLDataclass, SQLModel
 
@@ -21,38 +23,27 @@ class TestSQLDataclassDump:
         d = hero.dump()
         assert d == {"name": "Alice", "age": 25}
 
-    def test_dump_excludes_json_false(self) -> None:
-        class Secret(SQLDataclass):
-            name: str
-            password_hash: str = Field(default="", json=False)
-
-        s = Secret(name="Alice", password_hash="abc123")
-        d = s.dump()
-        assert "name" in d
-        assert "password_hash" not in d
-
-    def test_dump_includes_column_false(self) -> None:
-        class WithDisplay(SQLDataclass):
+    def test_dump_excludes_column_false(self) -> None:
+        class WithComputed(SQLDataclass):
             name: str
             display_name: str = Field(default="", column=False)
 
-        w = WithDisplay(name="alice", display_name="Alice")
+        w = WithComputed(name="alice", display_name="Alice")
         d = w.dump()
-        assert d["display_name"] == "Alice"
+        assert d["name"] == "alice"
+        assert "display_name" not in d
 
-    def test_dump_three_way_scoping(self) -> None:
-        class ThreeWay(SQLDataclass, table=True):
-            __tablename__ = "tw_dump_test"
+    def test_dump_on_table_model(self) -> None:
+        class Tbl(SQLDataclass, table=True):
+            __tablename__ = "dc_dump_tbl"
             id: int | None = Field(default=None, primary_key=True)
             name: str = ""
-            secret: str = Field(default="", json=False)
-            computed: str = Field(default="", column=False)
+            transient: str = Field(default="", column=False)
 
-        obj = ThreeWay(id=1, name="test", secret="hidden", computed="visible")
+        obj = Tbl(id=1, name="test", transient="temp")
         d = obj.dump()
         assert d["name"] == "test"
-        assert d["computed"] == "visible"
-        assert "secret" not in d
+        assert "transient" not in d
 
 
 class TestSQLDataclassLoad:
@@ -134,6 +125,34 @@ class TestSQLDataclassValidatePrivateField:
         assert result == 42
 
 
+class TestColumnFalseRequiresDefault:
+    """column=False fields must have a default value."""
+
+    def test_column_false_without_default_raises(self) -> None:
+        with pytest.raises(TypeError, match="column=False but no default"):
+
+            class Bad(SQLDataclass, table=True):
+                __tablename__ = "bad_no_default"
+                id: int | None = Field(default=None, primary_key=True)
+                transient: str = Field(column=False)  # no default!
+
+    def test_column_false_with_default_ok(self) -> None:
+        class Good(SQLDataclass, table=True):
+            __tablename__ = "good_with_default"
+            id: int | None = Field(default=None, primary_key=True)
+            transient: str = Field(default="", column=False)
+
+        assert "transient" in Good.__non_column_fields__
+
+    def test_column_false_with_factory_ok(self) -> None:
+        class GoodFactory(SQLDataclass, table=True):
+            __tablename__ = "good_with_factory"
+            id: int | None = Field(default=None, primary_key=True)
+            tags: list[str] = Field(default_factory=list, column=False)
+
+        assert "tags" in GoodFactory.__non_column_fields__
+
+
 # ---------------------------------------------------------------------------
 # SQLModel tests
 # ---------------------------------------------------------------------------
@@ -151,28 +170,17 @@ class TestSQLModelDump:
         d = p.dump()
         assert d == {"name": "Alice", "score": 9.5}
 
-    def test_dump_excludes_json_false(self) -> None:
-        class SecretModel(SQLModel, table=True):
-            __tablename__ = "sm_secret_dump"
-            id: int | None = Field(default=None, primary_key=True)
-            name: str = ""
-            token: str = Field(default="", json=False)
-
-        s = SecretModel(id=1, name="Alice", token="secret123")
-        d = s.dump()
-        assert "name" in d
-        assert "token" not in d
-
-    def test_dump_includes_column_false(self) -> None:
+    def test_dump_excludes_column_false(self) -> None:
         class Display(SQLModel, table=True):
             __tablename__ = "sm_display_dump"
             id: int | None = Field(default=None, primary_key=True)
             name: str = ""
-            display: str = Field(default="", column=False)
+            transient: str = Field(default="", column=False)
 
-        obj = Display(id=1, name="test", display="shown")
+        obj = Display(id=1, name="test", transient="temp")
         d = obj.dump()
-        assert d["display"] == "shown"
+        assert d["name"] == "test"
+        assert "transient" not in d
 
 
 class TestSQLModelLoad:
