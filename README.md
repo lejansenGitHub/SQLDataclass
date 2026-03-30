@@ -469,6 +469,62 @@ class User(SQLDataclass, table=True):
 | `order_by` | `str` | Column name to sort collection children by |
 | `default` | `Any` | Default value (`None` for many-to-one, `[]` for collections) |
 
+## Custom type annotations
+
+SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:
+
+```python
+# your_project/annotations.py
+from functools import partial
+from typing import Annotated
+
+import numpy as np
+import numpy.typing as npt
+from pydantic import BeforeValidator, PlainSerializer
+
+
+def _to_np_array(dtype, x):
+    return np.asarray(x, dtype=dtype)
+
+
+class Np:
+    """Numpy type annotations with auto-serialization."""
+
+    float64 = Annotated[
+        np.float64,
+        PlainSerializer(float, return_type=float, when_used="always"),
+        BeforeValidator(np.float64),
+    ]
+    int64 = Annotated[
+        np.int64,
+        PlainSerializer(int, return_type=int, when_used="always"),
+        BeforeValidator(np.int64),
+    ]
+
+    class Array:
+        float64 = Annotated[
+            npt.NDArray[np.float64],
+            PlainSerializer(lambda x: x.tolist(), return_type=list[float], when_used="always"),
+            BeforeValidator(partial(_to_np_array, np.float64)),
+        ]
+```
+
+Then use them in your models:
+
+```python
+from sqldataclass import SQLDataclass
+from your_project.annotations import Np
+
+class Measurement(SQLDataclass):
+    score: Np.float64
+    readings: Np.Array.float64
+
+m = Measurement(score=9.5, readings=[1.0, 2.0, 3.0])
+m.dump()  # {"score": 9.5, "readings": [1.0, 2.0, 3.0]}
+```
+
+This pattern works for any custom type — numpy, pandas, domain objects, etc. Pydantic's `Annotated` + `BeforeValidator`/`PlainSerializer` handles the conversion automatically.
+
 ## API reference
 
 ### Model methods
