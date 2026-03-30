@@ -10,6 +10,7 @@ from sqldataclass import Field, Relationship, SQLDataclass, insert_row
 
 # League → Team → Hero (3 levels)
 
+
 class NstLeague(SQLDataclass, table=True):
     __tablename__ = "nst_league"
     id: int | None = Field(default=None, primary_key=True)

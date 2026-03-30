@@ -223,26 +223,18 @@ def test_representation_memory_comparison() -> None:
 
     # Pydantic dataclass should beat BaseModel and ORM.
     bm_ratio = mem_basemodel.peak / mem_pydantic_dc.peak
-    assert bm_ratio > 1.3, (
-        f"Expected BaseModel to use >1.3x memory of pydantic dc, got {bm_ratio:.2f}x"
-    )
+    assert bm_ratio > 1.3, f"Expected BaseModel to use >1.3x memory of pydantic dc, got {bm_ratio:.2f}x"
 
     orm_ratio = mem_orm.peak / mem_pydantic_dc.peak
-    assert orm_ratio > 1.3, (
-        f"Expected ORM to use >1.3x memory of pydantic dc, got {orm_ratio:.2f}x"
-    )
+    assert orm_ratio > 1.3, f"Expected ORM to use >1.3x memory of pydantic dc, got {orm_ratio:.2f}x"
 
     # Pydantic dc should be comparable to stdlib dataclass.
     stdlib_ratio = mem_pydantic_dc.peak / mem_stdlib_dc.peak
-    assert stdlib_ratio < 1.5, (
-        f"Expected pydantic dc within 1.5x of stdlib dc, got {stdlib_ratio:.2f}x"
-    )
+    assert stdlib_ratio < 1.5, f"Expected pydantic dc within 1.5x of stdlib dc, got {stdlib_ratio:.2f}x"
 
     # Dict should use less or comparable memory to pydantic dc (dicts are optimised).
     dict_ratio = mem_pydantic_dc.peak / mem_dict.peak
-    assert dict_ratio < 3.0, (
-        f"Expected pydantic dc within 3x of dicts, got {dict_ratio:.2f}x"
-    )
+    assert dict_ratio < 3.0, f"Expected pydantic dc within 3x of dicts, got {dict_ratio:.2f}x"
 
 
 # ---------------------------------------------------------------------------
@@ -297,10 +289,7 @@ def test_load_all_vs_orm_session_query_memory() -> None:
     assert len(orm_results) == ROW_COUNT
 
     ratio = mem_orm_session.peak / mem_load_all.peak
-    assert ratio > 1.0, (
-        f"Expected ORM Session.query to use more peak memory than load_all, "
-        f"got ratio {ratio:.2f}x"
-    )
+    assert ratio > 1.0, f"Expected ORM Session.query to use more peak memory than load_all, got ratio {ratio:.2f}x"
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +361,4 @@ def test_format_discriminated_peak_memory() -> None:
 
     # Hydration should not be wildly expensive.  We check that peak memory
     # is below 50 MB for 10k small rows — a generous upper bound.
-    assert mem.peak < 50_000_000, (
-        f"format_discriminated peak memory too high: {mem.peak:,} B"
-    )
+    assert mem.peak < 50_000_000, f"format_discriminated peak memory too high: {mem.peak:,} B"

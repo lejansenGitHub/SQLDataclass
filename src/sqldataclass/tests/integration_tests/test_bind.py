@@ -57,10 +57,12 @@ class TestInsertWithoutConn:
         assert loaded[0].name == "Spider-Man"
 
     def test_insert_many_without_conn(self, bound_engine: Any) -> None:
-        BindHero.insert_many(objects=[
-            BindHero(name="Iron Man"),
-            BindHero(name="Thor"),
-        ])
+        BindHero.insert_many(
+            objects=[
+                BindHero(name="Iron Man"),
+                BindHero(name="Thor"),
+            ]
+        )
         loaded = BindHero.load_all()
         assert len(loaded) == 2
 

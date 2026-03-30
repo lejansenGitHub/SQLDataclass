@@ -75,9 +75,7 @@ def test_format_discriminated_normal() -> None:
         "p_max": 100.0,
         "capacity": None,
     }
-    result = format_discriminated(
-        flat_row, Participant, field_name="data", discriminator="behavior"
-    )
+    result = format_discriminated(flat_row, Participant, field_name="data", discriminator="behavior")
     assert result == {
         "participant_id": 1,
         "name": "Alice",
@@ -93,9 +91,7 @@ def test_format_discriminated_battery() -> None:
         "p_max": None,
         "capacity": 50.0,
     }
-    result = format_discriminated(
-        flat_row, Participant, field_name="data", discriminator="behavior"
-    )
+    result = format_discriminated(flat_row, Participant, field_name="data", discriminator="behavior")
     assert result == {
         "participant_id": 2,
         "name": "Bob",
@@ -111,9 +107,7 @@ def test_format_discriminated_then_construct_normal() -> None:
         "p_max": 100.0,
         "capacity": None,
     }
-    shaped = format_discriminated(
-        flat_row, Participant, field_name="data", discriminator="behavior"
-    )
+    shaped = format_discriminated(flat_row, Participant, field_name="data", discriminator="behavior")
     participant = Participant(**shaped)
     assert participant.participant_id == 1
     assert participant.name == "Alice"
@@ -129,9 +123,7 @@ def test_format_discriminated_then_construct_battery() -> None:
         "p_max": None,
         "capacity": 50.0,
     }
-    shaped = format_discriminated(
-        flat_row, Participant, field_name="data", discriminator="behavior"
-    )
+    shaped = format_discriminated(flat_row, Participant, field_name="data", discriminator="behavior")
     participant = Participant(**shaped)
     assert participant.participant_id == 2
     assert isinstance(participant.data, BatteryData)
@@ -145,9 +137,7 @@ def test_format_discriminated_defaults_are_filled() -> None:
         "name": "Charlie",
         "behavior": "normal",
     }
-    shaped = format_discriminated(
-        flat_row, Participant, field_name="data", discriminator="behavior"
-    )
+    shaped = format_discriminated(flat_row, Participant, field_name="data", discriminator="behavior")
     participant = Participant(**shaped)
     assert isinstance(participant.data, NormalData)
     assert participant.data.p_max == 0.0

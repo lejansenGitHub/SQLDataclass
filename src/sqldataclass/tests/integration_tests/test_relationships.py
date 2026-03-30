@@ -189,10 +189,20 @@ class TestDiscriminatedUnion:
 
     def test_load_all_hydrates_correct_variant(self, conn: Connection) -> None:
         self._insert_participant_with_data(
-            conn, pid=1, name="Alice", behavior="normal", data_id=1, p_max=100.0,
+            conn,
+            pid=1,
+            name="Alice",
+            behavior="normal",
+            data_id=1,
+            p_max=100.0,
         )
         self._insert_participant_with_data(
-            conn, pid=2, name="Bob", behavior="battery", data_id=1, capacity=50.0,
+            conn,
+            pid=2,
+            name="Bob",
+            behavior="battery",
+            data_id=1,
+            capacity=50.0,
         )
 
         participants = DiscParticipant.load_all(conn, order_by=DiscParticipant.c.id)
@@ -210,10 +220,20 @@ class TestDiscriminatedUnion:
 
     def test_load_one_returns_correct_variant(self, conn: Connection) -> None:
         self._insert_participant_with_data(
-            conn, pid=1, name="Alice", behavior="normal", data_id=1, p_max=75.5,
+            conn,
+            pid=1,
+            name="Alice",
+            behavior="normal",
+            data_id=1,
+            p_max=75.5,
         )
         self._insert_participant_with_data(
-            conn, pid=2, name="Bob", behavior="battery", data_id=1, capacity=200.0,
+            conn,
+            pid=2,
+            name="Bob",
+            behavior="battery",
+            data_id=1,
+            capacity=200.0,
         )
 
         alice = DiscParticipant.load_one(conn, where=DiscParticipant.c.id == 1)
@@ -228,7 +248,12 @@ class TestDiscriminatedUnion:
 
     def test_variant_specific_fields_accessible(self, conn: Connection) -> None:
         self._insert_participant_with_data(
-            conn, pid=1, name="Normal Guy", behavior="normal", data_id=1, p_max=42.0,
+            conn,
+            pid=1,
+            name="Normal Guy",
+            behavior="normal",
+            data_id=1,
+            p_max=42.0,
         )
 
         p = DiscParticipant.load_one(conn, where=DiscParticipant.c.id == 1)

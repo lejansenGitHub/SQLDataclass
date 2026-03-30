@@ -165,7 +165,8 @@ class TestRelationshipEdgeCases:
     """Edge cases for relationship loading."""
 
     def test_hero_with_null_fk_load_one_returns_team_none(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """load_one returns hero with team=None for NULL FK."""
         RecHero(id=1, name="Lone Wolf", team_id=None).insert(conn)
@@ -176,7 +177,8 @@ class TestRelationshipEdgeCases:
         assert hero.team is None
 
     def test_team_with_zero_heroes_returns_empty_list(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """Team with no heroes has heroes=[]."""
         RecTeam(id=1, name="Empty Team").insert(conn)
@@ -186,7 +188,8 @@ class TestRelationshipEdgeCases:
         assert team.heroes == []
 
     def test_discriminated_union_missing_discriminator_value(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """Row with discriminator value matching no variant raises ValidationError.
 
@@ -196,7 +199,9 @@ class TestRelationshipEdgeCases:
         """
         conn.execute(
             insert(RecParticipant.__table__).values(
-                id=1, name="Unknown", behavior="wind",
+                id=1,
+                name="Unknown",
+                behavior="wind",
             ),
         )
 
@@ -204,32 +209,40 @@ class TestRelationshipEdgeCases:
             RecParticipant.load_one(conn, where=RecParticipant.c.id == 1)
 
     def test_discriminated_union_with_three_variants(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """All three discriminated variants hydrate correctly."""
         conn.execute(
             insert(RecParticipant.__table__).values(
-                id=1, name="Alice", behavior="normal",
+                id=1,
+                name="Alice",
+                behavior="normal",
             ),
         )
         RecNormalData(id=1, participant_id=1, p_max=100.0).insert(conn)
 
         conn.execute(
             insert(RecParticipant.__table__).values(
-                id=2, name="Bob", behavior="battery",
+                id=2,
+                name="Bob",
+                behavior="battery",
             ),
         )
         RecBatteryData(id=1, participant_id=2, capacity=50.0).insert(conn)
 
         conn.execute(
             insert(RecParticipant.__table__).values(
-                id=3, name="Carol", behavior="solar",
+                id=3,
+                name="Carol",
+                behavior="solar",
             ),
         )
         RecSolarData(id=1, participant_id=3, panel_area=25.0).insert(conn)
 
         participants = RecParticipant.load_all(
-            conn, order_by=RecParticipant.c.id,
+            conn,
+            order_by=RecParticipant.c.id,
         )
         assert len(participants) == 3
 
@@ -243,7 +256,8 @@ class TestRelationshipEdgeCases:
         assert participants[2].data.panel_area == 25.0
 
     def test_one_to_many_children_all_present(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """One-to-many loads all children (order not guaranteed)."""
         RecTeam(id=1, name="Alpha").insert(conn)
@@ -258,7 +272,8 @@ class TestRelationshipEdgeCases:
         assert names == {"A", "B", "C"}
 
     def test_many_to_many_hero_on_zero_teams(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """Hero with no link rows has teams=[]."""
         RecMtmHero(id=1, name="Loner").insert(conn)
@@ -268,7 +283,8 @@ class TestRelationshipEdgeCases:
         assert heroes[0].teams == []
 
     def test_many_to_many_team_with_zero_heroes(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """Team (via link) with no heroes has heroes=[] when loaded via load_all."""
         RecMtmTeamR(id=1, name="Ghost Squad").insert(conn)
@@ -353,7 +369,8 @@ class TestInsertEdgeCases:
     """Edge cases for insert and to_dict with relationship fields."""
 
     def test_insert_model_with_relationship_fields(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """insert() on a model with relationship fields does not insert them."""
         RecTeam(id=1, name="Avengers").insert(conn)
@@ -371,7 +388,8 @@ class TestInsertEdgeCases:
         assert loaded.team_id == 1
 
     def test_insert_many_with_relationship_fields(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """insert_many with models that have relationship fields — flat dict only."""
         RecTeam(id=1, name="T1").insert(conn)
@@ -417,7 +435,8 @@ class TestErrorCases:
     """Error and edge cases for load_one and non-table models."""
 
     def test_load_one_multiple_matches_raises(
-        self, conn: Connection,
+        self,
+        conn: Connection,
     ) -> None:
         """load_one where clause matches multiple rows raises MultipleResultsFound."""
         RecTeam(id=1, name="Same").insert(conn)

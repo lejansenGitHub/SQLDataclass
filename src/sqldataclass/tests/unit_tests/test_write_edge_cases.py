@@ -123,10 +123,7 @@ class TestInsertMany:
         ]
         insert_many(connection, Item, rows_in)
         connection.commit()
-        results = {
-            r.id: r
-            for r in connection.execute(Item.__table__.select()).fetchall()
-        }
+        results = {r.id: r for r in connection.execute(Item.__table__.select()).fetchall()}
         assert results[200].name == "has_name"
         assert results[200].value is None
         assert results[201].name is None

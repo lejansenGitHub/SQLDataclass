@@ -313,15 +313,11 @@ def test_insert_many_speed() -> None:
     elapsed = _time_it(_do_insert)
 
     # Sanity check: 10k rows should insert in under 10 seconds on any machine.
-    assert elapsed < 10.0, (
-        f"insert_many took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
-    )
+    assert elapsed < 10.0, f"insert_many took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
 
     # Verify rows were actually inserted.
     with engine.connect() as conn:
-        count = conn.execute(
-            select(func.count()).select_from(TransformerTypeORM.__table__)
-        ).scalar()
+        count = conn.execute(select(func.count()).select_from(TransformerTypeORM.__table__)).scalar()
     assert count == ROW_COUNT
 
 
@@ -359,9 +355,7 @@ def test_format_discriminated_speed() -> None:
     elapsed = _time_it(_hydrate)
 
     # Generous upper bound: 10k hydrations should complete in under 10 seconds.
-    assert elapsed < 10.0, (
-        f"format_discriminated took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
-    )
+    assert elapsed < 10.0, f"format_discriminated took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
 
 
 def test_nest_fields_speed() -> None:
@@ -387,6 +381,4 @@ def test_nest_fields_speed() -> None:
     elapsed = _time_it(_nest)
 
     # Generous upper bound: 10k nest operations should complete in under 5 seconds.
-    assert elapsed < 5.0, (
-        f"nest_fields took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
-    )
+    assert elapsed < 5.0, f"nest_fields took too long: {elapsed:.4f}s for {ROW_COUNT} rows"
