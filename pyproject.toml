@@ -130,7 +130,7 @@ python_version = "3.13"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pytest.*", "alembic.*"]
+module = ["pytest.*", "alembic.*", "sqlmodel.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
