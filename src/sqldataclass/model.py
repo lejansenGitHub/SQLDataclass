@@ -86,6 +86,10 @@ from sqlalchemy import (
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.types import TypeEngine
 
+# ---------------------------------------------------------------------------
+# Pydantic dataclass configs
+# ---------------------------------------------------------------------------
+from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.query import _fast_construct
 from sqldataclass.query import fetch_one as _fetch_one
 from sqldataclass.query import load_all as _load_all
@@ -99,20 +103,18 @@ from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import insert_row as _insert_row
 from sqldataclass.write import upsert_row as _upsert_row
 
-# ---------------------------------------------------------------------------
-# Pydantic dataclass configs
-# ---------------------------------------------------------------------------
-
 _DATACLASS_CONFIG = ConfigDict(
     allow_inf_nan=False,
     arbitrary_types_allowed=True,
     extra="forbid",
+    ignored_types=(CyFunctionDetector,),
 )
 
 _STI_CHILD_CONFIG = ConfigDict(
     allow_inf_nan=False,
     arbitrary_types_allowed=True,
     extra="ignore",
+    ignored_types=(CyFunctionDetector,),
 )
 
 # ---------------------------------------------------------------------------

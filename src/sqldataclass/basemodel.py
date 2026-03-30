@@ -31,6 +31,7 @@ from pydantic import ConfigDict, model_validator
 from sqlalchemy import Column, MetaData, Table
 from sqlalchemy.engine import Engine
 
+from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.model import (
     _MODEL_REGISTRY,
     SQLDataclassMeta,
@@ -68,6 +69,7 @@ class SQLModel(pydantic.BaseModel):
         allow_inf_nan=False,
         arbitrary_types_allowed=True,
         extra="forbid",
+        ignored_types=(CyFunctionDetector,),
     )
 
     metadata: ClassVar[MetaData] = MetaData()

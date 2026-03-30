@@ -3,6 +3,7 @@
 __version__ = "0.1.2"
 
 from sqldataclass.basemodel import SQLModel
+from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.hydration import (
     discriminator_map,
     format_discriminated,
@@ -25,6 +26,7 @@ from sqldataclass.write import (
 
 __all__ = [
     "Base",
+    "CyFunctionDetector",
     "Field",
     "Relationship",
     "SQLDataclass",
