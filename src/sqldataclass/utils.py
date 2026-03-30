@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from functools import lru_cache
 from typing import Any
-
-from sqldataclass.versioning import camel_to_snake_case_upper
 
 
 def remove_unexpected_kwargs(obj: dict[str, Any], cls: type) -> None:
@@ -25,22 +21,3 @@ def remove_unexpected_kwargs(obj: dict[str, Any], cls: type) -> None:
 
     for key in list(obj.keys() - fields):
         del obj[key]
-
-
-@lru_cache
-def _legacy_version_field_name(class_name: str) -> str:
-    """Return the legacy version field name format (e.g. ADDRESSSCHEMA_VERSION)."""
-    name = re.sub(r"\[.*?\]", "", class_name).upper()
-    return f"{name}SCHEMA_VERSION"
-
-
-def migrate_legacy_version_strings(obj: dict[str, Any], cls: type) -> None:
-    """Rename legacy version field format to the current one.
-
-    Converts e.g. ``ADDRESSSCHEMA_VERSION`` → ``ADDRESS_VERSION``.
-    Modifies *obj* in place.
-    """
-    legacy_key = _legacy_version_field_name(cls.__name__)
-    if legacy_key in obj:
-        current_key = f"{camel_to_snake_case_upper(cls.__name__)}_VERSION"
-        obj[current_key] = obj.pop(legacy_key)

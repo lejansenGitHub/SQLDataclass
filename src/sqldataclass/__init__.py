@@ -24,7 +24,7 @@ from sqldataclass.return_types import (
     ModelReturnMany,
     NonNullDictReturn,
 )
-from sqldataclass.utils import migrate_legacy_version_strings, remove_unexpected_kwargs
+from sqldataclass.utils import remove_unexpected_kwargs
 from sqldataclass.validators import FillValueIfNone
 from sqldataclass.write import (
     flatten_for_table,
@@ -56,7 +56,6 @@ __all__ = [
     "insert_many",
     "insert_row",
     "load_all",
-    "migrate_legacy_version_strings",
     "nest_fields",
     "remove_unexpected_kwargs",
     "select_columns",
