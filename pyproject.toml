@@ -123,6 +123,8 @@ ignore = [
     "UP042",    # replace-str-enum
     "FURB110",  # if-exp-instead-of-or-operator
     "FURB171",  # single-item-membership-test
+    "PLC0415",  # import not at top-level — intentional for circular import avoidance and lazy loading
+    "UP046",    # Generic subclass vs type parameters — dataclass generics need Generic[] syntax
 ]
 
 [tool.mypy]
