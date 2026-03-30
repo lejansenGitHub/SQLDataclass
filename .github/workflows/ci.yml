@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
-      - run: ruff check src/
-      - run: ruff format --check src/
+      - run: ruff check src/sqldataclass/
+      - run: ruff format --check src/sqldataclass/
 
   typecheck:
     runs-on: ubuntu-latest
