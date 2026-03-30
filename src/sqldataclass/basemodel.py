@@ -16,6 +16,7 @@ Pure data model (no table)::
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -99,7 +100,7 @@ class SQLModel(pydantic.BaseModel):
         # Find metadata from class hierarchy
         target_metadata = cls.metadata
 
-        # Detect non-column fields: relationships and column=False
+        # Detect non-column fields and relationships
         # For BaseModel, the FieldInfo itself carries the metadata (not the default)
         relationship_fields: set[str] = set()
         non_column_fields: set[str] = set()
@@ -152,6 +153,31 @@ class SQLModel(pydantic.BaseModel):
 
         _attach_convenience_methods(cls)
         _MODEL_REGISTRY[tablename] = cls
+
+    @classmethod
+    def load(cls, data: dict[str, Any]) -> Self:
+        """Create an instance from a dict (e.g. JSON-deserialized data)."""
+        return cls(**data)
+
+    def dump(self) -> dict[str, Any]:
+        """Serialize to a dict suitable for JSON.
+
+        Excludes relationship fields and ``column=False`` fields.
+        """
+        non_col: frozenset[str] = getattr(type(self), "__non_column_fields__", frozenset())
+        rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
+        exclude = non_col | rel_keys
+        result = self.model_dump(warnings="error", by_alias=True, mode="json")
+        if exclude:
+            for key in exclude:
+                result.pop(key, None)
+        return result
+
+    def clone(self, *, deep: bool = False) -> Self:
+        """Create a copy of this instance via dump + reload."""
+        data = self.model_dump(by_alias=True)
+        new = type(self)(**data)
+        return deepcopy(new) if deep else new
 
     @classmethod
     def bind(cls, engine: Engine) -> None:

@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import re
 import types
+from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import fields as dc_fields
 from datetime import date, datetime, time
 from decimal import Decimal
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -52,7 +55,7 @@ from typing import (
 )
 from uuid import UUID
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import Field as PydanticField
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.fields import FieldInfo
@@ -1149,7 +1152,7 @@ def _build_sqldataclass(
     tablename = namespace.pop("__tablename__", _default_tablename(name))
     target_metadata = _find_metadata(bases)
 
-    # Detect non-column fields: relationships and column=False
+    # Detect non-column fields and relationships
     relationship_fields: set[str] = set()
     non_column_fields: set[str] = set()
     resolved_rels: dict[str, _ResolvedRelationship] = {}
@@ -1160,6 +1163,13 @@ def _build_sqldataclass(
         elif isinstance(default_val, FieldInfo):
             sa_info = _get_sa_info(default_val)
             if sa_info is not None and not sa_info.column:
+                # column=False fields must have a default (DB load won't provide a value)
+                if default_val.default is PydanticUndefined and default_val.default_factory is None:
+                    msg = (
+                        f"Field '{field_name}' has column=False but no default value. "
+                        "Non-persistent fields must have a default or default_factory."
+                    )
+                    raise TypeError(msg)
                 non_column_fields.add(field_name)
 
     # Build SA table before pydantic transforms the class
@@ -1464,6 +1474,59 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
     """
 
     metadata: ClassVar[MetaData]
+
+    @classmethod
+    def load(cls, data: dict[str, Any]) -> Self:
+        """Create an instance from a dict (e.g. JSON-deserialized data)."""
+        return cls(**data)
+
+    def dump(self) -> dict[str, Any]:
+        """Serialize to a dict suitable for JSON.
+
+        Excludes relationship fields and ``column=False`` fields.
+        """
+        non_col: frozenset[str] = getattr(type(self), "__non_column_fields__", frozenset())
+        rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
+        exclude = non_col | rel_keys
+        result: dict[str, Any] = TypeAdapter(type(self)).dump_python(
+            self,
+            warnings="error",
+            mode="json",
+            by_alias=True,
+        )
+        if exclude:
+            for key in exclude:
+                result.pop(key, None)
+        return result
+
+    def clone(self, *, deep: bool = False) -> Self:
+        """Create a copy of this instance via dump + reload."""
+        data = TypeAdapter(type(self)).dump_python(self, by_alias=True)
+        new = type(self)(**data)
+        return deepcopy(new) if deep else new
+
+    @staticmethod
+    def validate_private_field(annotation: Any, value: Any) -> Any:
+        """Validate a value against a type annotation using pydantic."""
+        return TypeAdapter(annotation).validate_python(value)
+
+    @classmethod
+    @lru_cache
+    def model_field_names(cls) -> frozenset[str]:
+        """Return all field names (using aliases where defined)."""
+        result: set[str] = set()
+        for field in dc_fields(cls):
+            if isinstance(field.default, FieldInfo) and field.default.alias is not None:
+                result.add(field.default.alias)
+            else:
+                result.add(field.name)
+        return frozenset(result)
+
+    @classmethod
+    @lru_cache
+    def data_fields(cls) -> frozenset[str]:
+        """Return field names suitable for data operations (excludes version fields)."""
+        return cls.model_field_names()
 
     @classmethod
     def bind(cls, engine: Engine) -> None:
