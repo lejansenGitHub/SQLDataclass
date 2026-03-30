@@ -260,7 +260,7 @@ class TestAllExportsImportable:
     """Verify every name in __all__ is importable."""
 
     def test_all_exports(self) -> None:
-        import sqldataclass as _sqldataclass  # noqa: PLC0415
+        import sqldataclass as _sqldataclass
 
         for name in _sqldataclass.__all__:
             assert hasattr(_sqldataclass, name), f"{name} listed in __all__ but not importable"

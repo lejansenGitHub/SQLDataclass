@@ -123,6 +123,8 @@ ignore = [
     "UP042",    # replace-str-enum
     "FURB110",  # if-exp-instead-of-or-operator
     "FURB171",  # single-item-membership-test
+    "PLC0415",  # import not at top-level — intentional for circular import avoidance and lazy loading
+    "UP046",    # Generic subclass vs type parameters — dataclass generics need Generic[] syntax
 ]
 
 [tool.mypy]
@@ -130,7 +132,7 @@ python_version = "3.13"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pytest.*"]
+module = ["pytest.*", "alembic.*", "sqlmodel.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -138,7 +140,7 @@ module = ["sqldataclass.tests.*"]
 disallow_untyped_decorators = false
 # Relationship() fields have runtime defaults that mypy can't see through dataclass_transform
 # SQLModel convenience methods are dynamically attached, causing attr-defined errors in tests
-disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc"]
+disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "unused-ignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["src"]
