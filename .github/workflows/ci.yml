@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
-      - run: mypy src/sqldataclass/ --exclude tests
+      - run: mypy src/sqldataclass/
 
   test:
     runs-on: ubuntu-latest
