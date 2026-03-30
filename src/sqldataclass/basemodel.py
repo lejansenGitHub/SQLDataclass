@@ -27,7 +27,7 @@ from typing import (
 )
 
 import pydantic
-from pydantic import ConfigDict
+from pydantic import ConfigDict, model_validator
 from sqlalchemy import Column, MetaData, Table
 from sqlalchemy.engine import Engine
 
@@ -41,6 +41,11 @@ from sqldataclass.model import (
     _is_relationship,
     _resolve_relationships,
     _ResolvedRelationship,
+)
+from sqldataclass.versioning import (
+    __DO_MIGRATION__,
+    do_migration,
+    version_field_name_for,
 )
 
 
@@ -67,7 +72,7 @@ class SQLModel(pydantic.BaseModel):
 
     metadata: ClassVar[MetaData] = MetaData()
 
-    def __init_subclass__(cls, table: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002
+    def __init_subclass__(cls, table: bool = False, versioned: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002
         super().__init_subclass__(**kwargs)
 
         # Enforce no cross-inheritance with SQLDataclass
@@ -79,9 +84,11 @@ class SQLModel(pydantic.BaseModel):
         # Store the table flag for __pydantic_init_subclass__ to use later
         cls.__sqlmodel_is_basemodel__ = True
         cls.__sqldataclass_is_table__ = table
+        cls.__versioned__ = versioned
         cls.__relationships__ = {}
         cls.__non_column_fields__ = frozenset()
         cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]
+        cls._sqlmodel_pending_versioned__ = versioned  # type: ignore[attr-defined]
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -154,9 +161,38 @@ class SQLModel(pydantic.BaseModel):
         _attach_convenience_methods(cls)
         _MODEL_REGISTRY[tablename] = cls
 
+        # Versioned models: validate the version field
+        versioned: bool = getattr(cls, "_sqlmodel_pending_versioned__", False)
+        if versioned:
+            vf_name = version_field_name_for(cls.__name__)
+            if vf_name not in cls.model_fields:
+                msg = f"Versioned model {cls.__name__} requires a field '{vf_name}: int = <VERSION_NUM>'"
+                raise AttributeError(msg)
+            default = cls.model_fields[vf_name].default
+            if not isinstance(default, int):
+                msg = f"Version field '{vf_name}' must have an int default, got {type(default).__name__}"
+                raise AttributeError(msg)
+
+    @model_validator(mode="before")
+    @classmethod
+    def __validator_migration(cls, obj: dict[str, Any]) -> dict[str, Any]:
+        if getattr(cls, "__versioned__", False) and __DO_MIGRATION__.get():
+            return do_migration(obj, cls)
+        return obj
+
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
-        """Create an instance from a dict (e.g. JSON-deserialized data)."""
+        """Create an instance from a dict (e.g. JSON-deserialized data).
+
+        For versioned models, this triggers migration if the data has an
+        older schema version (or no version key at all).
+        """
+        if getattr(cls, "__versioned__", False):
+            token = __DO_MIGRATION__.set(True)
+            try:
+                return cls(**data)
+            finally:
+                __DO_MIGRATION__.reset(token)
         return cls(**data)
 
     def dump(self) -> dict[str, Any]:
@@ -178,6 +214,33 @@ class SQLModel(pydantic.BaseModel):
         data = self.model_dump(by_alias=True)
         new = type(self)(**data)
         return deepcopy(new) if deep else new
+
+    @classmethod
+    def migrate(cls, obj: dict[str, Any]) -> dict[str, Any]:
+        """Override in versioned subclasses to transform old data."""
+        return obj
+
+    @classmethod
+    def get_version_field_name(cls) -> str:
+        """Return the auto-generated version field name for this class."""
+        return version_field_name_for(cls.__name__)
+
+    @classmethod
+    def get_schema_version(cls) -> int:
+        """Return the current schema version (the field's default value)."""
+        vf = cls.get_version_field_name()
+        if vf in cls.model_fields:
+            result: int = cls.model_fields[vf].default
+            return result
+        msg = f"Version field '{vf}' not found on {cls.__name__}"
+        raise AttributeError(msg)
+
+    @classmethod
+    def outdated(cls, obj: dict[str, Any]) -> bool:
+        """Return True if the dict has an older schema version."""
+        schema_ver = cls.get_schema_version()
+        current: int = obj.get(cls.get_version_field_name(), 1)
+        return current < schema_ver
 
     @classmethod
     def bind(cls, engine: Engine) -> None:
@@ -205,6 +268,7 @@ class SQLModel(pydantic.BaseModel):
         __tablename__: ClassVar[str]
         __sqldataclass_is_table__: ClassVar[bool]
         __sqlmodel_is_basemodel__: ClassVar[bool]
+        __versioned__: ClassVar[bool]
         __relationships__: ClassVar[dict[str, _ResolvedRelationship]]
         __non_column_fields__: ClassVar[frozenset[str]]
         c: ClassVar[Any]
