@@ -89,6 +89,11 @@ from sqlalchemy.types import TypeEngine
 from sqldataclass.query import _fast_construct
 from sqldataclass.query import fetch_one as _fetch_one
 from sqldataclass.query import load_all as _load_all
+from sqldataclass.versioning import (
+    __DO_MIGRATION__,
+    do_migration,
+    version_field_name_for,
+)
 from sqldataclass.write import flatten_for_table as _flatten_for_table
 from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import insert_row as _insert_row
@@ -989,6 +994,7 @@ class SQLDataclassMeta(type):
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002
+        versioned: bool = False,  # noqa: FBT001, FBT002
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -1017,10 +1023,31 @@ class SQLDataclassMeta(type):
 
         _BUILDING.add(qualname)
         try:
-            result: type = _build_sqldataclass(mcs, name, bases, namespace, table=table, **kwargs)
+            result: type = _build_sqldataclass(
+                mcs,
+                name,
+                bases,
+                namespace,
+                table=table,
+                versioned=versioned,
+                **kwargs,
+            )
             return result
         finally:
             _BUILDING.discard(qualname)
+
+
+def _make_migration_validator(ArgsKwargs: type) -> classmethod:  # type: ignore[type-arg]
+    """Create a pydantic before-validator for versioned dataclass migration."""
+    from pydantic import model_validator
+
+    def _validator_fn(cls: type, obj: Any) -> Any:
+        obj = obj.kwargs or {} if isinstance(obj, ArgsKwargs) else obj  # type: ignore[attr-defined]
+        if __DO_MIGRATION__.get():
+            return do_migration(obj, cls)
+        return obj
+
+    return model_validator(mode="before")(classmethod(_validator_fn))  # type: ignore[arg-type,return-value]
 
 
 _STI_REGISTRY: dict[str, dict[str, Any]] = {}
@@ -1138,13 +1165,14 @@ def _find_metadata(bases: tuple[type, ...]) -> MetaData:
     return MetaData()
 
 
-def _build_sqldataclass(
+def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915
     mcs: type,
     name: str,
     bases: tuple[type, ...],
     namespace: dict[str, Any],
     *,
     table: bool,
+    versioned: bool = False,
     **kwargs: Any,
 ) -> Any:
     """Core logic for building a SQLDataclass (called from metaclass __new__)."""
@@ -1193,6 +1221,12 @@ def _build_sqldataclass(
         # Resolve relationships (needs resolved type hints)
         resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
+    # Versioned models: inject a before-validator for migration
+    if versioned:
+        from pydantic_core import ArgsKwargs
+
+        namespace["__validator_migration"] = _make_migration_validator(ArgsKwargs)
+
     # Create the actual class via the metaclass (keeps SQLDataclass in bases)
     cls: Any = type.__new__(mcs, name, bases, namespace, **kwargs)
 
@@ -1201,6 +1235,7 @@ def _build_sqldataclass(
 
     # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
+    dc_cls.__versioned__ = versioned
     dc_cls.__relationships__ = resolved_rels
     dc_cls.__non_column_fields__ = frozenset(non_column_fields)
     if sa_table is not None:
@@ -1223,6 +1258,25 @@ def _build_sqldataclass(
         _MODEL_REGISTRY[tablename] = dc_cls
     else:
         dc_cls.metadata = target_metadata
+
+    # Versioned models: validate the version field exists and is correct
+    if versioned:
+        vf_name = version_field_name_for(name)
+        # Check the field exists in annotations
+        all_fields = {f.name for f in dc_fields(dc_cls)}
+        if vf_name not in all_fields:
+            msg = f"Versioned model {name} requires a field '{vf_name}: int = <VERSION_NUM>'"
+            raise AttributeError(msg)
+        # Check it has an int default
+        for f in dc_fields(dc_cls):
+            if f.name == vf_name:
+                default = f.default
+                if isinstance(default, FieldInfo):
+                    default = default.default
+                if not isinstance(default, int):
+                    msg = f"Version field '{vf_name}' must have an int default, got {type(default).__name__}"
+                    raise AttributeError(msg)
+                break
 
     return dc_cls
 
@@ -1477,7 +1531,17 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
 
     @classmethod
     def load(cls, data: dict[str, Any]) -> Self:
-        """Create an instance from a dict (e.g. JSON-deserialized data)."""
+        """Create an instance from a dict (e.g. JSON-deserialized data).
+
+        For versioned models, this triggers migration if the data has an
+        older schema version (or no version key at all).
+        """
+        if getattr(cls, "__versioned__", False):
+            token = __DO_MIGRATION__.set(True)
+            try:
+                return cls(**data)
+            finally:
+                __DO_MIGRATION__.reset(token)
         return cls(**data)
 
     def dump(self) -> dict[str, Any]:
@@ -1525,8 +1589,50 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
     @classmethod
     @lru_cache
     def data_fields(cls) -> frozenset[str]:
-        """Return field names suitable for data operations (excludes version fields)."""
-        return cls.model_field_names()
+        """Return field names suitable for data operations.
+
+        For versioned models, excludes ``_VERSION`` fields.
+        """
+        names = cls.model_field_names()
+        if getattr(cls, "__versioned__", False):
+            return frozenset(n for n in names if not n.endswith("_VERSION"))
+        return names
+
+    @classmethod
+    def migrate(cls, obj: dict[str, Any]) -> dict[str, Any]:
+        """Override in versioned subclasses to transform old data.
+
+        Only called when ``load()`` detects an older schema version.
+        """
+        return obj
+
+    @classmethod
+    @lru_cache
+    def get_version_field_name(cls) -> str:
+        """Return the auto-generated version field name for this class."""
+        return version_field_name_for(cls.__name__)
+
+    @classmethod
+    @lru_cache
+    def get_schema_version(cls) -> int:
+        """Return the current schema version (the field's default value)."""
+        vf = cls.get_version_field_name()
+        for f in dc_fields(cls):
+            if f.name == vf:
+                default = f.default
+                if isinstance(default, FieldInfo):
+                    result: int = default.default
+                    return result
+                return int(default)  # type: ignore[arg-type]
+        msg = f"Version field '{vf}' not found on {cls.__name__}"
+        raise AttributeError(msg)
+
+    @classmethod
+    def outdated(cls, obj: dict[str, Any]) -> bool:
+        """Return True if the dict has an older schema version."""
+        schema_ver = cls.get_schema_version()
+        current: int = obj.get(cls.get_version_field_name(), 1)
+        return current < schema_ver
 
     @classmethod
     def bind(cls, engine: Engine) -> None:
