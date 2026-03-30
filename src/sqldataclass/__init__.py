@@ -17,6 +17,15 @@ from sqldataclass.registry import (
     drop_all_tables,
     table,
 )
+from sqldataclass.return_types import (
+    DictReturn,
+    DictReturnMany,
+    ModelReturn,
+    ModelReturnMany,
+    NonNullDictReturn,
+)
+from sqldataclass.utils import migrate_legacy_version_strings, remove_unexpected_kwargs
+from sqldataclass.validators import FillValueIfNone
 from sqldataclass.write import (
     flatten_for_table,
     insert_many,
@@ -27,7 +36,13 @@ from sqldataclass.write import (
 __all__ = [
     "Base",
     "CyFunctionDetector",
+    "DictReturn",
+    "DictReturnMany",
     "Field",
+    "FillValueIfNone",
+    "ModelReturn",
+    "ModelReturnMany",
+    "NonNullDictReturn",
     "Relationship",
     "SQLDataclass",
     "SQLModel",
@@ -41,7 +56,9 @@ __all__ = [
     "insert_many",
     "insert_row",
     "load_all",
+    "migrate_legacy_version_strings",
     "nest_fields",
+    "remove_unexpected_kwargs",
     "select_columns",
     "table",
     "upsert_row",
