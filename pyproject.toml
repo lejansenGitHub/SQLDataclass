@@ -130,7 +130,7 @@ python_version = "3.13"
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["pytest.*"]
+module = ["pytest.*", "alembic.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -138,7 +138,7 @@ module = ["sqldataclass.tests.*"]
 disallow_untyped_decorators = false
 # Relationship() fields have runtime defaults that mypy can't see through dataclass_transform
 # SQLModel convenience methods are dynamically attached, causing attr-defined errors in tests
-disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc"]
+disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "metaclass", "unused-ignore"]
 
 [tool.pytest.ini_options]
 testpaths = ["src"]
