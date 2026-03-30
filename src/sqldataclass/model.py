@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import re
 import types
+from copy import deepcopy
 from dataclasses import dataclass
+from dataclasses import fields as dc_fields
 from datetime import date, datetime, time
 from decimal import Decimal
+from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -52,7 +55,7 @@ from typing import (
 )
 from uuid import UUID
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from pydantic import Field as PydanticField
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.fields import FieldInfo
@@ -178,6 +181,7 @@ class SAColumnInfo:
     nullable: bool | None = None
     index: bool = False
     column: bool = True
+    json: bool = True
     unique: bool = False
     foreign_key: str | None = None
     sa_type: Any = None
@@ -250,6 +254,7 @@ def Field(  # noqa: PLR0913
     server_default: Any = None,
     sa_column_kwargs: dict[str, Any] | None = None,
     column: bool = True,
+    json: bool = True,
     # Pydantic params (passed through)
     alias: str | None = None,
     title: str | None = None,
@@ -278,6 +283,7 @@ def Field(  # noqa: PLR0913
         server_default=server_default,
         sa_column_kwargs=sa_column_kwargs,
         column=column,
+        json=json,
     )
 
     pydantic_kwargs: dict[str, Any] = {
@@ -1135,7 +1141,7 @@ def _find_metadata(bases: tuple[type, ...]) -> MetaData:
     return MetaData()
 
 
-def _build_sqldataclass(
+def _build_sqldataclass(  # noqa: PLR0912
     mcs: type,
     name: str,
     bases: tuple[type, ...],
@@ -1149,9 +1155,10 @@ def _build_sqldataclass(
     tablename = namespace.pop("__tablename__", _default_tablename(name))
     target_metadata = _find_metadata(bases)
 
-    # Detect non-column fields: relationships and column=False
+    # Detect non-column fields, json-excluded fields, and relationships
     relationship_fields: set[str] = set()
     non_column_fields: set[str] = set()
+    json_exclude_fields: set[str] = set()
     resolved_rels: dict[str, _ResolvedRelationship] = {}
     for field_name in annotations:
         default_val = namespace.get(field_name)
@@ -1159,8 +1166,11 @@ def _build_sqldataclass(
             relationship_fields.add(field_name)
         elif isinstance(default_val, FieldInfo):
             sa_info = _get_sa_info(default_val)
-            if sa_info is not None and not sa_info.column:
-                non_column_fields.add(field_name)
+            if sa_info is not None:
+                if not sa_info.column:
+                    non_column_fields.add(field_name)
+                if not sa_info.json:
+                    json_exclude_fields.add(field_name)
 
     # Build SA table before pydantic transforms the class
     sa_table: Table | None = None
@@ -1193,6 +1203,7 @@ def _build_sqldataclass(
     dc_cls.__sqldataclass_is_table__ = table
     dc_cls.__relationships__ = resolved_rels
     dc_cls.__non_column_fields__ = frozenset(non_column_fields)
+    dc_cls.__json_exclude_fields__ = frozenset(json_exclude_fields)
     if sa_table is not None:
         dc_cls.__table__ = sa_table
         dc_cls.__tablename__ = tablename
@@ -1464,6 +1475,59 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
     """
 
     metadata: ClassVar[MetaData]
+
+    @classmethod
+    def load(cls, data: dict[str, Any]) -> Self:
+        """Create an instance from a dict (e.g. JSON-deserialized data)."""
+        return cls(**data)
+
+    def dump(self) -> dict[str, Any]:
+        """Serialize to a dict suitable for JSON.
+
+        Excludes relationship fields, non-column fields, and ``json=False`` fields.
+        """
+        json_exclude: frozenset[str] = getattr(type(self), "__json_exclude_fields__", frozenset())
+        rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
+        exclude = json_exclude | rel_keys
+        result: dict[str, Any] = TypeAdapter(type(self)).dump_python(
+            self,
+            warnings="error",
+            mode="json",
+            by_alias=True,
+        )
+        if exclude:
+            for key in exclude:
+                result.pop(key, None)
+        return result
+
+    def clone(self, *, deep: bool = False) -> Self:
+        """Create a copy of this instance via dump + reload."""
+        data = TypeAdapter(type(self)).dump_python(self, by_alias=True)
+        new = type(self)(**data)
+        return deepcopy(new) if deep else new
+
+    @staticmethod
+    def validate_private_field(annotation: Any, value: Any) -> Any:
+        """Validate a value against a type annotation using pydantic."""
+        return TypeAdapter(annotation).validate_python(value)
+
+    @classmethod
+    @lru_cache
+    def model_field_names(cls) -> frozenset[str]:
+        """Return all field names (using aliases where defined)."""
+        result: set[str] = set()
+        for field in dc_fields(cls):
+            if isinstance(field.default, FieldInfo) and field.default.alias is not None:
+                result.add(field.default.alias)
+            else:
+                result.add(field.name)
+        return frozenset(result)
+
+    @classmethod
+    @lru_cache
+    def data_fields(cls) -> frozenset[str]:
+        """Return field names suitable for data operations (excludes version fields)."""
+        return cls.model_field_names()
 
     @classmethod
     def bind(cls, engine: Engine) -> None:
