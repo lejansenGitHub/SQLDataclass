@@ -45,6 +45,16 @@ def upsert_row(
     conn.execute(stmt)
 
 
+def _server_defaulted_columns(table_class: type) -> frozenset[str]:
+    """Return column names that have server defaults or are autoincrement PKs."""
+    target_table = table(table_class)
+    return frozenset(
+        col.name
+        for col in target_table.columns
+        if col.server_default is not None or (col.primary_key and col.autoincrement is not False)
+    )
+
+
 def flatten_for_table(
     domain_object: Any,
     *,
@@ -52,8 +62,9 @@ def flatten_for_table(
 ) -> dict[str, Any]:
     """Flatten a pydantic dataclass to a dict suitable for table insertion.
 
-    Strips nested dicts (which belong to other tables) and explicitly excluded keys.
-    Uses pydantic's model_dump if available, otherwise dataclasses.asdict.
+    Strips nested dicts (which belong to other tables), explicitly excluded keys,
+    and None values for columns with server defaults (SERIAL PKs, DEFAULT NOW(), etc.)
+    so the database generates the value.
     """
     if hasattr(domain_object, "__pydantic_fields__"):
         raw = {field_name: getattr(domain_object, field_name) for field_name in domain_object.__pydantic_fields__}
@@ -65,6 +76,7 @@ def flatten_for_table(
     # Exclude relationship fields and column=False fields
     rel_keys: set[str] = set(getattr(type(domain_object), "__relationships__", {}))
     non_column_keys: set[str] = set(getattr(type(domain_object), "__non_column_fields__", ()))
+    server_defaults = _server_defaulted_columns(type(domain_object))
 
     return {
         key: value
@@ -75,4 +87,5 @@ def flatten_for_table(
         and not isinstance(value, dict | list)
         and not dataclasses.is_dataclass(value)
         and not isinstance(value, pydantic.BaseModel)
+        and not (value is None and key in server_defaults)
     }

@@ -577,7 +577,10 @@ def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> An
     if where is not None:
         query = query.where(where)
     if order_by is not None:
-        query = query.order_by(order_by)
+        if isinstance(order_by, (list, tuple)):
+            query = query.order_by(*order_by)
+        else:
+            query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
     return query
 
 
@@ -1382,7 +1385,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             if where is not None:
                 query = query.where(where)
             if order_by is not None:
-                query = query.order_by(order_by)
+                query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
             query = _apply_pagination(query)
             results = _load_all(conn, query, klass)
         else:
@@ -1390,7 +1393,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             if where is not None:
                 query = query.where(where)
             if order_by is not None:
-                query = query.order_by(order_by)
+                query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
             query = _apply_pagination(query)
             return _polymorphic_load(conn, query, klass)
 

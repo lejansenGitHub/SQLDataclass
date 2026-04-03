@@ -109,6 +109,35 @@ class TestInsertLoadRoundtrip:
         heroes = Hero.load_all(conn, order_by=Hero.c.name)
         assert [h.name for h in heroes] == ["Alice", "Bob", "Charlie"]
 
+    def test_load_all_with_multi_column_order_by_tuple(self, conn: Connection) -> None:
+        """
+        Multi-column ordering via tuple should sort by first column,
+        then by second column within ties.
+        """
+        Hero(id=1, name="Charlie", secret_name="z").insert(conn)
+        Hero(id=2, name="Alice", secret_name="b").insert(conn)
+        Hero(id=3, name="Alice", secret_name="a").insert(conn)
+
+        heroes = Hero.load_all(conn, order_by=(Hero.c.name, Hero.c.secret_name))
+        assert [(h.name, h.secret_name) for h in heroes] == [
+            ("Alice", "a"),
+            ("Alice", "b"),
+            ("Charlie", "z"),
+        ]
+
+    def test_load_all_with_multi_column_order_by_list(self, conn: Connection) -> None:
+        """List syntax should also work for multi-column ordering."""
+        Hero(id=1, name="Bob", secret_name="z").insert(conn)
+        Hero(id=2, name="Alice", secret_name="b").insert(conn)
+        Hero(id=3, name="Alice", secret_name="a").insert(conn)
+
+        heroes = Hero.load_all(conn, order_by=[Hero.c.name, Hero.c.secret_name])
+        assert [(h.name, h.secret_name) for h in heroes] == [
+            ("Alice", "a"),
+            ("Alice", "b"),
+            ("Bob", "z"),
+        ]
+
     def test_load_one_returns_single_instance(self, conn: Connection) -> None:
         Hero(id=1, name="Spider-Man", secret_name="Peter Parker").insert(conn)
         Hero(id=2, name="Iron Man", secret_name="Tony Stark").insert(conn)

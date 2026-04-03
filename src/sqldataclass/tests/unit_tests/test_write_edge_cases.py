@@ -14,6 +14,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase
 
+from sqldataclass import Field, SQLDataclass
 from sqldataclass.write import flatten_for_table, insert_many, insert_row, upsert_row
 
 # ---------------------------------------------------------------------------
@@ -225,6 +226,57 @@ class TestFlattenForTable:
         obj = FlatModel(id=5, name="keep_all", score=1.0)
         result = flatten_for_table(obj)
         assert result == {"id": 5, "name": "keep_all", "score": 1.0}
+
+    def test_none_autoincrement_pk_skipped(self) -> None:
+        """
+        None value for a SERIAL/autoincrement primary key should be
+        omitted from the flattened dict so the database generates it.
+        """
+
+        class AutoPK(SQLDataclass, table=True):
+            __tablename__ = "auto_pk_test"
+            id: int | None = Field(default=None, primary_key=True)
+            name: str = ""
+
+        obj = AutoPK(name="hello")
+        result = flatten_for_table(obj)
+        assert "id" not in result
+        assert result == {"name": "hello"}
+
+    def test_none_server_default_skipped(self) -> None:
+        """
+        None value for a column with server_default (e.g. DEFAULT NOW())
+        should be omitted so the database generates the value.
+        """
+        from sqlalchemy import text
+
+        class WithServerDefault(SQLDataclass, table=True):
+            __tablename__ = "server_default_test"
+            id: int | None = Field(default=None, primary_key=True)
+            name: str = ""
+            created_at: str | None = Field(default=None, server_default=text("NOW()"))
+
+        obj = WithServerDefault(name="test")
+        result = flatten_for_table(obj)
+        assert "id" not in result
+        assert "created_at" not in result
+        assert result == {"name": "test"}
+
+    def test_explicit_value_for_server_default_kept(self) -> None:
+        """
+        If a server-defaulted column has an explicit non-None value,
+        it should be included in the flattened dict.
+        """
+        from sqlalchemy import text
+
+        class WithServerDefault(SQLDataclass, table=True):
+            __tablename__ = "server_default_explicit_test"
+            id: int | None = Field(default=None, primary_key=True)
+            created_at: str | None = Field(default=None, server_default=text("NOW()"))
+
+        obj = WithServerDefault(id=42, created_at="2026-01-01")
+        result = flatten_for_table(obj)
+        assert result == {"id": 42, "created_at": "2026-01-01"}
 
 
 # ---------------------------------------------------------------------------
