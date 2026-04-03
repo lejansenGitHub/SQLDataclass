@@ -33,16 +33,55 @@ def upsert_row(
 ) -> None:
     """PostgreSQL ON CONFLICT upsert.
 
-    Updates all non-index columns on conflict.
+    Updates all non-index columns on conflict, excluding None values for
+    columns with server defaults so the database-generated value is preserved.
     """
     target_table = table(table_class)
+    server_defaults = _server_defaulted_columns(table_class)
     stmt = pg_insert(target_table).values(values)
-    update_columns = {key: value for key, value in values.items() if key not in index_elements}
+    update_columns = {
+        key: value
+        for key, value in values.items()
+        if key not in index_elements and not (value is None and key in server_defaults)
+    }
     if update_columns:
         stmt = stmt.on_conflict_do_update(index_elements=index_elements, set_=update_columns)
     else:
         stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
     conn.execute(stmt)
+
+
+def upsert_row_returning(
+    conn: Connection,
+    table_class: type,
+    instance: Any,
+    values: dict[str, Any],
+    *,
+    index_elements: list[str],
+) -> None:
+    """PostgreSQL ON CONFLICT upsert with RETURNING.
+
+    Like upsert_row, but uses RETURNING to populate DB-generated fields on the
+    instance in place.
+    """
+    target_table = table(table_class)
+    server_defaults = _server_defaulted_columns(table_class)
+    stmt = pg_insert(target_table).values(values)
+    update_columns = {
+        key: value
+        for key, value in values.items()
+        if key not in index_elements and not (value is None and key in server_defaults)
+    }
+    if update_columns:
+        stmt = stmt.on_conflict_do_update(index_elements=index_elements, set_=update_columns)
+    else:
+        stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
+    stmt = stmt.returning(target_table)
+    result = conn.execute(stmt)
+    row = result.mappings().fetchone()
+    if row:
+        for key, value in row.items():
+            object.__setattr__(instance, key, value)
 
 
 def _server_defaulted_columns(table_class: type) -> frozenset[str]:

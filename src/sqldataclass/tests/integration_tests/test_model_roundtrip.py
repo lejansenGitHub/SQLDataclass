@@ -68,6 +68,43 @@ def conn(engine: Engine) -> Generator[Connection]:
 # ---------------------------------------------------------------------------
 
 
+class TestInsertPopulatesGeneratedFields:
+    """After insert(), DB-generated fields should be populated on the instance."""
+
+    def test_insert_populates_id(self, conn: Connection) -> None:
+        """
+        When id is None (autoincrement), insert() should mutate the instance
+        so that self.id reflects the DB-generated primary key.
+        """
+        hero = Hero(name="Spider-Man", secret_name="Peter Parker", age=25)
+        assert hero.id is None
+
+        hero.insert(conn)
+
+        assert hero.id is not None
+        assert isinstance(hero.id, int)
+        assert hero.id >= 1
+
+    def test_insert_populates_id_for_multiple_rows(self, conn: Connection) -> None:
+        """Each inserted instance gets its own unique DB-generated id."""
+        hero_a = Hero(name="A", secret_name="a")
+        hero_b = Hero(name="B", secret_name="b")
+
+        hero_a.insert(conn)
+        hero_b.insert(conn)
+
+        assert hero_a.id is not None
+        assert hero_b.id is not None
+        assert hero_a.id != hero_b.id
+
+    def test_insert_preserves_explicit_id(self, conn: Connection) -> None:
+        """When an explicit id is provided, insert() should keep it."""
+        hero = Hero(id=42, name="Explicit", secret_name="e")
+        hero.insert(conn)
+
+        assert hero.id == 42
+
+
 class TestInsertLoadRoundtrip:
     """Full insert -> load round-trip via the Hero model."""
 

@@ -102,6 +102,7 @@ from sqldataclass.write import flatten_for_table as _flatten_for_table
 from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import insert_row as _insert_row
 from sqldataclass.write import upsert_row as _upsert_row
+from sqldataclass.write import upsert_row_returning as _upsert_row_returning
 
 _DATACLASS_CONFIG = ConfigDict(
     allow_inf_nan=False,
@@ -1450,22 +1451,34 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
         _insert_many(conn, klass, rows)
 
     def _model_insert(self: Any, conn: Connection | None = None) -> None:
-        """Insert this instance into the database."""
+        """Insert this instance into the database.
+
+        Uses RETURNING to populate DB-generated fields (e.g. autoincrement id,
+        server defaults) on the instance in place.
+        """
         if conn is None:
             with _get_engine(type(self)).begin() as auto_conn:
                 _model_insert(self, auto_conn)
                 return
         flat = _apply_discriminator_on_insert(type(self), _flatten_for_table(self))
-        _insert_row(conn, type(self), flat)
+        target_table = type(self).__table__
+        result = conn.execute(target_table.insert().values(flat).returning(target_table))
+        row = result.mappings().fetchone()
+        if row:
+            for key, value in row.items():
+                object.__setattr__(self, key, value)
 
     def _model_upsert(self: Any, conn: Connection | None = None, *, index_elements: list[str]) -> None:
-        """Upsert (PostgreSQL ON CONFLICT) this instance."""
+        """Upsert (PostgreSQL ON CONFLICT) this instance.
+
+        Uses RETURNING to populate DB-generated fields on the instance in place.
+        """
         if conn is None:
             with _get_engine(type(self)).begin() as auto_conn:
                 _model_upsert(self, auto_conn, index_elements=index_elements)
                 return
         flat = _flatten_for_table(self)
-        _upsert_row(conn, type(self), flat, index_elements=index_elements)
+        _upsert_row_returning(conn, type(self), self, flat, index_elements=index_elements)
 
     def _model_update(klass: Any, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int:
         """Update rows matching *where* with *values*. Returns number of rows updated."""

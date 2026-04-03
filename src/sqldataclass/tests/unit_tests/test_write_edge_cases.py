@@ -284,6 +284,83 @@ class TestFlattenForTable:
 # ---------------------------------------------------------------------------
 
 
+class TestUpsertRowServerDefaults:
+    """Upsert should not overwrite server-defaulted columns with None on conflict."""
+
+    def test_upsert_skips_none_server_defaulted_columns_in_update_set(self, connection: Connection) -> None:
+        """
+        When upserting a row that already exists and a server-defaulted column
+        has value None, the update set should not include that column — so the
+        existing DB value is preserved rather than being overwritten with NULL.
+        """
+        from sqlalchemy import Column, Integer, String, text
+
+        class ServerDefaultItem(DeclarativeBase):
+            __abstract__ = True
+
+        class _SdBase(DeclarativeBase):
+            pass
+
+        class SdItem(_SdBase):
+            __tablename__ = "sd_items"
+            id = Column(Integer, primary_key=True, autoincrement=False)
+            name = Column(String, nullable=True)
+            status = Column(String, nullable=True, server_default=text("'active'"))
+
+        engine = create_engine("sqlite:///:memory:")
+        _SdBase.metadata.create_all(engine)
+
+        with engine.connect() as conn:
+            # --- Insert the initial row (status will get server default 'active') ---
+            insert_row(conn, SdItem, {"id": 1, "name": "original"})
+            conn.commit()
+
+            row = conn.execute(SdItem.__table__.select().where(SdItem.__table__.c.id == 1)).fetchone()
+            assert row is not None
+            assert row.status == "active"
+
+            # --- Upsert with status=None should NOT overwrite 'active' with NULL ---
+            upsert_row(conn, SdItem, {"id": 1, "name": "updated", "status": None}, index_elements=["id"])
+            conn.commit()
+
+            row = conn.execute(SdItem.__table__.select().where(SdItem.__table__.c.id == 1)).fetchone()
+            assert row is not None
+            assert row.name == "updated"
+            assert row.status == "active"  # preserved, not overwritten with None
+
+    def test_upsert_keeps_explicit_server_default_value(self, connection: Connection) -> None:
+        """
+        When a server-defaulted column has an explicit non-None value, the
+        upsert update set should include it normally.
+        """
+        from sqlalchemy import text
+
+        class _SdBase2(DeclarativeBase):
+            pass
+
+        class SdItem2(_SdBase2):
+            __tablename__ = "sd_items2"
+            id = Column(Integer, primary_key=True, autoincrement=False)
+            name = Column(String, nullable=True)
+            status = Column(String, nullable=True, server_default=text("'active'"))
+
+        engine = create_engine("sqlite:///:memory:")
+        _SdBase2.metadata.create_all(engine)
+
+        with engine.connect() as conn:
+            insert_row(conn, SdItem2, {"id": 1, "name": "original"})
+            conn.commit()
+
+            # Upsert with explicit status value should update it
+            upsert_row(conn, SdItem2, {"id": 1, "name": "updated", "status": "inactive"}, index_elements=["id"])
+            conn.commit()
+
+            row = conn.execute(SdItem2.__table__.select().where(SdItem2.__table__.c.id == 1)).fetchone()
+            assert row is not None
+            assert row.name == "updated"
+            assert row.status == "inactive"
+
+
 class TestUpsertRow:
     def test_upsert_inserts_new_row_on_sqlite(self, connection: Connection) -> None:
         """PostgreSQL upsert dialect happens to work on SQLite for inserts."""
