@@ -138,6 +138,9 @@ ignore = [
 "unittest.mock.patch.object".msg = "Use mocker.patch.object() from pytest-mock instead."
 "pytest.MonkeyPatch".msg = "Use mocker fixture from pytest-mock instead."
 "_pytest.monkeypatch.MonkeyPatch".msg = "Use mocker fixture from pytest-mock instead."
+"syrupy".msg = "No snapshot testing. Assert specific fields explicitly."
+"inline_snapshot".msg = "No snapshot testing. Assert specific fields explicitly."
+"pytest_snapshot".msg = "No snapshot testing. Assert specific fields explicitly."
 
 [tool.mypy]
 python_version = "3.13"
