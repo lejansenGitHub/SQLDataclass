@@ -145,6 +145,17 @@ ignore = [
 [tool.mypy]
 python_version = "3.13"
 strict = true
+disallow_any_generics = true
+disallow_any_explicit = true
+disallow_any_unimported = true
+disallow_subclassing_any = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["sqldataclass.*"]
+# ORM bridge requires Any for metaclass ops, SA interop, pydantic validators.
+# See .mypy/ignores/explicit_any.md for full justification.
+disable_error_code = ["explicit-any"]
 
 [[tool.mypy.overrides]]
 module = ["pytest.*", "alembic.*", "sqlmodel.*"]
