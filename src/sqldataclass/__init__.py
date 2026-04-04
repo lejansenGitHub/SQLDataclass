@@ -1,6 +1,6 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 
 from sqldataclass.basemodel import SQLModel
 from sqldataclass.cy_function_helper import CyFunctionDetector
