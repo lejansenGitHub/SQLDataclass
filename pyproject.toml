@@ -1,6 +1,6 @@
 [project]
 name = "sqldataclass"
-version = "0.1.4"
+version = "0.1.5"
 description = "Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible."
 readme = "README.md"
 license = "MIT"
@@ -48,7 +48,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.14",
     "pre-commit>=4.0",
-    "blueprint-linters @ file:vendor/blueprint_linters-0.2.0-py3-none-any.whl",
+    "blueprint-linters>=0.2.0",
 ]
 
 [project.urls]
@@ -56,12 +56,12 @@ Homepage = "https://github.com/lejansenGitHub/SQLDataclass"
 Repository = "https://github.com/lejansenGitHub/SQLDataclass"
 Issues = "https://github.com/lejansenGitHub/SQLDataclass/issues"
 
+[tool.uv]
+find-links = ["vendor/"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqldataclass"]
