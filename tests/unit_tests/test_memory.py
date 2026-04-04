@@ -145,7 +145,7 @@ def _measure_bytes(factory: object) -> int:
     """Return peak memory (bytes) allocated while building ROW_COUNT objects."""
     tracemalloc.start()
     tracemalloc.reset_peak()
-    objects = [factory(i) for i in range(ROW_COUNT)]  # type: ignore[operator]
+    objects = [factory(i) for i in range(ROW_COUNT)]  # type: ignore[operator]  # factory callable is Any from parametrize
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     assert len(objects) == ROW_COUNT

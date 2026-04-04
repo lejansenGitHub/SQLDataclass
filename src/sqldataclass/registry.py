@@ -20,7 +20,7 @@ metadata: MetaData = Base.metadata
 
 def table(cls: type) -> Table:
     """Get the Core Table from an ORM-mapped class."""
-    tbl: Table = cls.__table__  # type: ignore[attr-defined]
+    tbl: Table = cls.__table__  # type: ignore[attr-defined]  # SA table attrs set dynamically by metaclass
     return tbl
 
 

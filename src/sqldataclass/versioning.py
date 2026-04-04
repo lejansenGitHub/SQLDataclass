@@ -60,8 +60,8 @@ def do_migration(obj: dict[str, Any], cls: type) -> dict[str, Any]:
     Missing version key means the data predates versioning — treat as
     version 1 so the full migration chain runs.
     """
-    version_key: str = cls.get_version_field_name()  # type: ignore[attr-defined]
+    version_key: str = cls.get_version_field_name()  # type: ignore[attr-defined]  # versioned mixin adds this method
     if version_key not in obj:
         obj[version_key] = 1  # missing = oldest version
-    result: dict[str, Any] = cls.migrate(obj)  # type: ignore[attr-defined]
+    result: dict[str, Any] = cls.migrate(obj)  # type: ignore[attr-defined]  # versioned mixin adds this method
     return result

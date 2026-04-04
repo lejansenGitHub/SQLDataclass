@@ -17,7 +17,7 @@ from sqlalchemy.orm import DeclarativeBase, Session
 
 from sqldataclass.hydration import format_discriminated
 from sqldataclass.query import fetch_all, load_all
-from sqldataclass.tests.util.memory import measure_memory
+from tests.util.memory import measure_memory
 
 ROW_COUNT = 10_000
 
@@ -183,7 +183,7 @@ def _seed_db(row_count: int) -> Any:
     """Create an in-memory SQLite engine with *row_count* rows and return it."""
     engine = create_engine("sqlite://", echo=False)
     _MemBenchBase.metadata.create_all(engine)
-    bench_table: Table = TransformerTypeORM.__table__  # type: ignore[assignment]
+    bench_table: Table = TransformerTypeORM.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
     with engine.begin() as conn:
         conn.execute(
             insert(bench_table),
@@ -256,7 +256,7 @@ def test_load_all_vs_fetch_all_memory() -> None:
     with measure_memory() as mem_fetch_loop:
         with engine.connect() as conn:
             rows = fetch_all(conn, query)
-            fetch_loop_results = [TransformerTypePydanticDC(**r) for r in rows]  # type: ignore[arg-type]
+            fetch_loop_results = [TransformerTypePydanticDC(**r) for r in rows]  # type: ignore[arg-type]  # dict values are Any from fetch_all
 
     assert len(load_all_results) == ROW_COUNT
     assert len(fetch_loop_results) == ROW_COUNT

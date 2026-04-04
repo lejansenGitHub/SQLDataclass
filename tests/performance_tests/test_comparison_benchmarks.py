@@ -164,7 +164,7 @@ try:
     from sqlmodel import SQLModel
     from sqlmodel import select as sm_select
 
-    class BenchSM(SQLModel, table=True):  # type: ignore[misc]
+    class BenchSM(SQLModel, table=True):  # type: ignore[misc]  # SQLModel metaclass typing not fully visible
         __tablename__ = "bench_cmp_sm"
         id: int | None = SMField(default=None, primary_key=True)
         name: str
@@ -190,7 +190,7 @@ try:
     HAS_SQLMODEL = True
 except ImportError:
     HAS_SQLMODEL = False
-    BenchSM = None  # type: ignore[assignment,misc]
+    BenchSM = None  # type: ignore[assignment,misc]  # fallback when sqlmodel not installed
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +236,7 @@ def sqlite_engine() -> Engine:
     rows = [_row(i) for i in range(ROW_COUNT)]
     with engine.begin() as conn:
         conn.execute(insert(BenchSDC.__table__), rows)
-        conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]
+        conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]  # SA DeclarativeBase __table__ type not visible
         conn.execute(insert(BenchOurSQLModel.__table__), rows)
         if HAS_SQLMODEL:
             conn.execute(insert(BenchSM.__table__), rows)
@@ -282,7 +282,7 @@ def pg_engine() -> Any:
     rows = [_row(i) for i in range(ROW_COUNT)]
     with engine.begin() as conn:
         conn.execute(insert(BenchSDC.__table__), rows)
-        conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]
+        conn.execute(insert(BenchSA.__table__), rows)  # type: ignore[arg-type]  # SA DeclarativeBase __table__ type not visible
         conn.execute(insert(BenchOurSQLModel.__table__), rows)
         if HAS_SQLMODEL:
             conn.execute(insert(BenchSM.__table__), rows)

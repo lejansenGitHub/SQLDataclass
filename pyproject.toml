@@ -41,6 +41,8 @@ postgres = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "diff-cover>=9.0",
     "ruff>=0.9",
     "mypy>=1.14",
     "pre-commit>=4.0",
@@ -57,7 +59,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqldataclass"]
-exclude = ["src/sqldataclass/tests"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/sqldataclass/py.typed" = "sqldataclass/py.typed"
@@ -136,11 +137,28 @@ module = ["pytest.*", "alembic.*", "sqlmodel.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["sqldataclass.tests.*"]
+module = ["tests.*"]
 disallow_untyped_decorators = false
 # Relationship() fields have runtime defaults that mypy can't see through dataclass_transform
 # SQLModel convenience methods are dynamically attached, causing attr-defined errors in tests
 disable_error_code = ["call-arg", "arg-type", "attr-defined", "misc", "unused-ignore"]
 
 [tool.pytest.ini_options]
-testpaths = ["src"]
+testpaths = ["tests"]
+markers = [
+    "integration: integration tests (real DB, real infrastructure)",
+    "performance: performance tests (runtime + memory benchmarks)",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["sqldataclass"]
+
+[tool.coverage.report]
+exclude_also = [
+    "# pragma: type-narrowing",
+    "# pragma: protocol-stub",
+    "# pragma: defensive",
+    "# pragma: not-implemented",
+    "if TYPE_CHECKING:",
+]

@@ -126,7 +126,7 @@ class TestInheritanceSeparation:
 
         with pytest.raises(TypeError):
 
-            class Bad(SQLModel, DcBase):  # type: ignore[metaclass]
+            class Bad(SQLModel, DcBase):  # type: ignore[metaclass]  # intentional invalid metaclass to test error
                 pass
 
     def test_sqldataclass_cannot_inherit_sqlmodel(self) -> None:
@@ -135,7 +135,7 @@ class TestInheritanceSeparation:
 
         with pytest.raises(TypeError):
 
-            class Bad(SQLDataclass, MBase, table=True):  # type: ignore[metaclass]
+            class Bad(SQLDataclass, MBase, table=True):  # type: ignore[metaclass]  # intentional invalid metaclass to test error
                 __tablename__ = "bad_cross"
                 id: int | None = Field(default=None, primary_key=True)
 

@@ -73,7 +73,7 @@ def conn(engine: Engine) -> Generator[Connection]:
 
 
 def _insert_items(conn: Connection, rows: list[dict[str, object]]) -> None:
-    item_table: Table = ItemSql.__table__  # type: ignore[assignment]
+    item_table: Table = ItemSql.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
     if rows:
         conn.execute(insert(item_table), rows)
 
@@ -255,7 +255,7 @@ class TestSelectColumnsEdgeCases:
     def test_overlapping_columns_execute(self, conn: Connection) -> None:
         """Overlapping columns can be executed and rows contain all values."""
         _insert_items(conn, [{"id": 1, "name": "item", "value": 1.0}])
-        tag_table: Table = TagSql.__table__  # type: ignore[assignment]
+        tag_table: Table = TagSql.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
         conn.execute(insert(tag_table), [{"id": 10, "name": "tag", "item_id": 1}])
 
         raw_stmt = select_columns(ItemSql, TagSql)

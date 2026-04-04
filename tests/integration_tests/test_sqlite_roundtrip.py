@@ -313,7 +313,7 @@ def populated_engine() -> Engine:
     """SQLite engine with ROW_COUNT rows."""
     engine = create_engine("sqlite:///:memory:")
     _OrmBase.metadata.create_all(engine)
-    bench_table: Table = TransformerTypeSqlBench.__table__  # type: ignore[assignment]
+    bench_table: Table = TransformerTypeSqlBench.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
     with engine.begin() as conn:
         conn.execute(
             insert(bench_table),

@@ -184,7 +184,7 @@ def _seed_db(row_count: int) -> Any:
     """Create an in-memory SQLite engine with *row_count* rows and return it."""
     engine = create_engine("sqlite://", echo=False)
     _RuntimeBenchBase.metadata.create_all(engine)
-    bench_table: Table = TransformerTypeORM.__table__  # type: ignore[assignment]
+    bench_table: Table = TransformerTypeORM.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
     with engine.begin() as conn:
         conn.execute(
             insert(bench_table),
@@ -256,7 +256,7 @@ def test_query_speed_load_all_vs_fetch_all_loop() -> None:
     def _fetch_loop() -> list[TransformerTypePydanticDC]:
         with engine.connect() as conn:
             rows = fetch_all(conn, query)
-            return [TransformerTypePydanticDC(**r) for r in rows]  # type: ignore[arg-type]
+            return [TransformerTypePydanticDC(**r) for r in rows]  # type: ignore[arg-type]  # dict values are Any from fetch_all
 
     elapsed_load = _time_it(_load_all)
     elapsed_fetch = _time_it(_fetch_loop)

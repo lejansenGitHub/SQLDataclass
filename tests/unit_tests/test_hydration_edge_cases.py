@@ -123,7 +123,7 @@ class TestNestFieldsEdgeCases:
         data: dict[str, object] = {f"k{i}": i for i in range(n)}
         keys = {f"k{i}" for i in range(n)}
         result = nest_fields(data, "bulk", keys)
-        assert len(result["bulk"]) == n  # type: ignore[arg-type,unused-ignore]
+        assert len(result["bulk"]) == n  # type: ignore[arg-type,unused-ignore]  # dict value type is Any at runtime
         # Only 'bulk' remains at top level
         assert set(result.keys()) == {"bulk"}
 

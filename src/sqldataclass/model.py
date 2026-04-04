@@ -100,8 +100,6 @@ from sqldataclass.versioning import (
 )
 from sqldataclass.write import flatten_for_table as _flatten_for_table
 from sqldataclass.write import insert_many as _insert_many
-from sqldataclass.write import insert_row as _insert_row
-from sqldataclass.write import upsert_row as _upsert_row
 from sqldataclass.write import upsert_row_returning as _upsert_row_returning
 
 _DATACLASS_CONFIG = ConfigDict(
@@ -247,7 +245,7 @@ def _is_relationship(default_val: Any) -> bool:
 _UNSET: Any = object()
 
 
-def Field(  # noqa: PLR0913
+def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
     default: Any = _UNSET,
     *,
     default_factory: Any | None = None,
@@ -491,7 +489,7 @@ def _resolve_relationships(
         if not _is_relationship(default_val):
             continue
 
-        rel_info = _get_rel_info(default_val)  # type: ignore[arg-type]
+        rel_info = _get_rel_info(default_val)  # type: ignore[arg-type]  # default_val narrowed at runtime
         if rel_info is None:
             msg = f"Field {field_name!r} is marked as a relationship but has no RelationshipInfo metadata"
             raise TypeError(msg)
@@ -578,10 +576,10 @@ def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> An
     if where is not None:
         query = query.where(where)
     if order_by is not None:
-        if isinstance(order_by, (list, tuple)):
+        if isinstance(order_by, list | tuple):
             query = query.order_by(*order_by)
         else:
-            query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
+            query = query.order_by(*order_by) if isinstance(order_by, list | tuple) else query.order_by(order_by)
     return query
 
 
@@ -596,14 +594,14 @@ def _hydrate_discriminated(
     rel: _ResolvedRelationship,
 ) -> Any:
     """Hydrate a discriminated union relationship field."""
-    disc_value = base_data.get(rel.discriminator)  # type: ignore[arg-type]
-    active_type = _find_active_variant(rel.target_types, rel.discriminator, disc_value)  # type: ignore[arg-type]
+    disc_value = base_data.get(rel.discriminator)  # type: ignore[arg-type]  # discriminator is str at runtime
+    active_type = _find_active_variant(rel.target_types, rel.discriminator, disc_value)  # type: ignore[arg-type]  # discriminator is str at runtime
     if active_type is None or not hasattr(active_type, "__table__"):
         return None
     target_table: Table = active_type.__table__
     prefix = f"__{rel.field_name}__{target_table.name}__"
     nested = _extract_prefixed(row_dict, prefix)
-    disc_key: str = rel.discriminator  # type: ignore[assignment]
+    disc_key: str = rel.discriminator  # type: ignore[assignment]  # narrowed to str after None check above
     if disc_key not in nested:
         nested[disc_key] = disc_value
     return _fast_construct(active_type, nested)
@@ -713,7 +711,7 @@ def _ensure_resolved(rel: _ResolvedRelationship) -> None:
     rel.target_types = [_resolve_forward_ref(t) for t in rel.target_types]
 
 
-def _populate_collections(  # noqa: PLR0912
+def _populate_collections(  # noqa: PLR0912  # many relationship variants require many branches
     cls: Any,
     parents: list[Any],
     conn: Connection,
@@ -797,7 +795,7 @@ def _populate_collections(  # noqa: PLR0912
                 _populate_collections(child_cls, children, conn, _depth=_depth + 1)
 
 
-def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection) -> None:  # noqa: PLR0912
+def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection) -> None:  # noqa: PLR0912  # many relationship variants require many branches
     """For objects whose scalar (many-to-one) rels are None, load them via query."""
     rels: dict[str, _ResolvedRelationship] = getattr(cls, "__relationships__", {})
     if not hasattr(cls, "__table__"):
@@ -888,7 +886,7 @@ def _populate_scalar_chains(objects: list[Any], conn: Connection, *, _depth: int
                 _populate_scalar_chains(nested, conn, _depth=_depth + 1)
 
 
-def _load_one_to_many(  # noqa: PLR0913
+def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all context params
     conn: Connection,
     field_name: str,
     child_type: Any,
@@ -923,7 +921,7 @@ def _load_one_to_many(  # noqa: PLR0913
                     object.__setattr__(child, back_populates, parent)
 
 
-def _load_many_to_many(  # noqa: PLR0913
+def _load_many_to_many(  # noqa: PLR0913  # relationship loading needs all context params
     conn: Connection,
     field_name: str,
     target_type: Any,
@@ -999,14 +997,14 @@ class SQLDataclassMeta(type):
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
-        table: bool = False,  # noqa: FBT001, FBT002
-        versioned: bool = False,  # noqa: FBT001, FBT002
+        table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
+        versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
         if name == "SQLDataclass":
             cls = super().__new__(mcs, name, bases, namespace)
-            cls.metadata = MetaData()  # type: ignore[attr-defined]
+            cls.metadata = MetaData()  # type: ignore[attr-defined]  # SA table attrs set dynamically by metaclass
             return cls
 
         # Enforce no cross-inheritance with SQLModel
@@ -1043,17 +1041,17 @@ class SQLDataclassMeta(type):
             _BUILDING.discard(qualname)
 
 
-def _make_migration_validator(ArgsKwargs: type) -> classmethod:  # type: ignore[type-arg]
+def _make_migration_validator(ArgsKwargs: type) -> classmethod:  # type: ignore[type-arg]  # pydantic internal type, no public generic param
     """Create a pydantic before-validator for versioned dataclass migration."""
     from pydantic import model_validator
 
     def _validator_fn(cls: type, obj: Any) -> Any:
-        obj = obj.kwargs or {} if isinstance(obj, ArgsKwargs) else obj  # type: ignore[attr-defined]
+        obj = obj.kwargs or {} if isinstance(obj, ArgsKwargs) else obj  # type: ignore[attr-defined]  # ArgsKwargs.kwargs exists at runtime
         if __DO_MIGRATION__.get():
             return do_migration(obj, cls)
         return obj
 
-    return model_validator(mode="before")(classmethod(_validator_fn))  # type: ignore[arg-type,return-value]
+    return model_validator(mode="before")(classmethod(_validator_fn))  # type: ignore[arg-type,return-value]  # pydantic validator decorator typing is imprecise
 
 
 _STI_REGISTRY: dict[str, dict[str, Any]] = {}
@@ -1068,7 +1066,7 @@ def _find_sti_parent(bases: tuple[type, ...]) -> Any | None:
     return None
 
 
-def _build_sti_child(  # noqa: PLR0915
+def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inherently complex
     mcs: type,
     name: str,
     bases: tuple[type, ...],
@@ -1171,7 +1169,7 @@ def _find_metadata(bases: tuple[type, ...]) -> MetaData:
     return MetaData()
 
 
-def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915
+def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder is inherently complex
     mcs: type,
     name: str,
     bases: tuple[type, ...],
@@ -1346,14 +1344,14 @@ def _apply_discriminator_on_insert(klass: Any, flat: dict[str, Any]) -> dict[str
     return flat
 
 
-def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
+def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches many methods in one pass
     """Attach query/write convenience methods to a table class."""
 
     def _select(klass: Any) -> Any:
         """Build a ``SELECT`` for this table."""
         return sa_select(klass.__table__)
 
-    def _model_load_all(  # noqa: PLR0913
+    def _model_load_all(  # noqa: PLR0913  # mirrors query.load_all signature
         klass: Any,
         conn: Connection | None = None,
         where: Any = None,
@@ -1386,7 +1384,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             if where is not None:
                 query = query.where(where)
             if order_by is not None:
-                query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
+                query = query.order_by(*order_by) if isinstance(order_by, list | tuple) else query.order_by(order_by)
             query = _apply_pagination(query)
             results = _load_all(conn, query, klass)
         else:
@@ -1394,7 +1392,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915
             if where is not None:
                 query = query.where(where)
             if order_by is not None:
-                query = query.order_by(*order_by) if isinstance(order_by, (list, tuple)) else query.order_by(order_by)
+                query = query.order_by(*order_by) if isinstance(order_by, list | tuple) else query.order_by(order_by)
             query = _apply_pagination(query)
             return _polymorphic_load(conn, query, klass)
 
@@ -1641,7 +1639,7 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
                 if isinstance(default, FieldInfo):
                     result: int = default.default
                     return result
-                return int(default)  # type: ignore[arg-type]
+                return int(default)  # type: ignore[arg-type]  # default is numeric at runtime after branch check
         msg = f"Version field '{vf}' not found on {cls.__name__}"
         raise AttributeError(msg)
 
@@ -1668,10 +1666,10 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         Per-model engines take priority over the global engine.
         """
         if cls is SQLDataclass or cls.__name__ == "SQLDataclass":
-            global _BOUND_ENGINE  # noqa: PLW0603
+            global _BOUND_ENGINE  # noqa: PLW0603  # module-level engine is the intended bind target
             _BOUND_ENGINE = engine
         else:
-            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]
+            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]  # per-model engine stored dynamically
 
     if TYPE_CHECKING:
         __table__: ClassVar[Table]

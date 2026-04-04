@@ -63,7 +63,7 @@ class TestFieldParameterGaps:
     def test_server_default(self) -> None:
         cols = {c.name: c for c in ServerDefaultModel.__table__.columns}
         assert cols["created"].server_default is not None
-        assert str(cols["created"].server_default.arg) == "now()"  # type: ignore[attr-defined]
+        assert str(cols["created"].server_default.arg) == "now()"  # type: ignore[attr-defined]  # SA server_default.arg exists at runtime
 
     def test_sa_column_kwargs_comment(self) -> None:
         cols = {c.name: c for c in ColumnKwargsModel.__table__.columns}

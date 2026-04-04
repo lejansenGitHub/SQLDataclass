@@ -167,7 +167,7 @@ class TestManyToOne:
 class TestDiscriminatedUnion:
     """Participant → NormalData | BatteryData via behavior discriminator."""
 
-    def _insert_participant_with_data(  # noqa: PLR0913
+    def _insert_participant_with_data(  # noqa: PLR0913  # test helper needs all fixture params
         self,
         conn: Connection,
         *,

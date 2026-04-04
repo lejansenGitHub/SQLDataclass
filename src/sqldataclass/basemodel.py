@@ -74,7 +74,7 @@ class SQLModel(pydantic.BaseModel):
 
     metadata: ClassVar[MetaData] = MetaData()
 
-    def __init_subclass__(cls, table: bool = False, versioned: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002
+    def __init_subclass__(cls, table: bool = False, versioned: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002  # bool flag required by class keyword syntax
         super().__init_subclass__(**kwargs)
 
         # Enforce no cross-inheritance with SQLDataclass
@@ -89,8 +89,8 @@ class SQLModel(pydantic.BaseModel):
         cls.__versioned__ = versioned
         cls.__relationships__ = {}
         cls.__non_column_fields__ = frozenset()
-        cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]
-        cls._sqlmodel_pending_versioned__ = versioned  # type: ignore[attr-defined]
+        cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
+        cls._sqlmodel_pending_versioned__ = versioned  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -158,7 +158,7 @@ class SQLModel(pydantic.BaseModel):
                     fk_map[fk.column.table.name] = col
                 except Exception:
                     pass
-        cls.__fk_map__ = fk_map  # type: ignore[attr-defined]
+        cls.__fk_map__ = fk_map  # type: ignore[attr-defined]  # FK lookup map stored dynamically on table classes
 
         _attach_convenience_methods(cls)
         _MODEL_REGISTRY[tablename] = cls
@@ -261,7 +261,7 @@ class SQLModel(pydantic.BaseModel):
 
             _model_mod._BOUND_ENGINE = engine
         else:
-            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]
+            cls.__sqldataclass_engine__ = engine  # type: ignore[attr-defined]  # per-model engine stored dynamically
 
     if TYPE_CHECKING:
         from sqlalchemy.engine import Connection

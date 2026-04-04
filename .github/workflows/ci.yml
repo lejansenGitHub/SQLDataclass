@@ -28,7 +28,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: mypy src/sqldataclass/
 
-  test:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,4 +36,35 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
-      - run: python -m pytest src/sqldataclass/tests/ -x --ignore=src/sqldataclass/tests/integration_tests/test_alembic.py --ignore=src/sqldataclass/tests/performance_tests -v
+      - run: pytest tests/ -m "not integration and not performance" --cov=sqldataclass --cov-report=xml -x -v
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: coverage.xml
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -m integration -x -v
+
+  diff-cover:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-xml
+      - run: diff-cover coverage.xml --compare-branch=origin/main --fail-under=80

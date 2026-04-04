@@ -47,4 +47,4 @@ class TestNonNullDictReturn:
 class TestDictReturnMany:
     def test_with_list(self) -> None:
         r = DictReturnMany(data=[{"a": 1}, {"b": 2}], errors={})
-        assert len(r.data) == 2  # type: ignore[arg-type]
+        assert len(r.data) == 2  # type: ignore[arg-type]  # generic type param not inferred from constructor

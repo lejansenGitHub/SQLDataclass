@@ -1,11 +1,14 @@
 """Tests for Alembic migration compatibility with SQLDataclass.metadata."""
 
+import pytest
+
+pytest.importorskip("alembic")
+
 import os
 import shutil
 import tempfile
 from typing import Any
 
-import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory

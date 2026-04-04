@@ -189,7 +189,7 @@ class TestSQLDataclassTable:
 
     def test_pydantic_validation_rejects_wrong_type(self) -> None:
         with pytest.raises(ValidationError):
-            Hero(name=123)  # type: ignore[arg-type]
+            Hero(name=123)  # type: ignore[arg-type]  # intentional wrong type to test validation
 
     def test_instance_creation_with_defaults(self) -> None:
         hero = Hero()
@@ -290,7 +290,7 @@ class TestSQLDataclassNoTable:
 
     def test_pydantic_validation_rejects_wrong_type(self) -> None:
         with pytest.raises(ValidationError):
-            HeroCreate(name=123, secret_name="x")  # type: ignore[arg-type]
+            HeroCreate(name=123, secret_name="x")  # type: ignore[arg-type]  # intentional wrong type to test validation
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ class TestFillValueIfNone:
         class Config(SQLDataclass):
             name: Annotated[str, FillValueIfNone(default="unnamed")]
 
-        c = Config(name=None)  # type: ignore[arg-type]
+        c = Config(name=None)  # type: ignore[arg-type]  # intentional None to test FillValueIfNone
         assert c.name == "unnamed"
 
     def test_preserves_non_none(self) -> None:
@@ -28,7 +28,7 @@ class TestFillValueIfNone:
         class Config(SQLDataclass):
             tags: Annotated[list[str], FillValueIfNone(default_factory=list)]
 
-        c = Config(tags=None)  # type: ignore[arg-type]
+        c = Config(tags=None)  # type: ignore[arg-type]  # intentional None to test FillValueIfNone
         assert c.tags == []
 
     def test_raises_without_default_or_factory(self) -> None:

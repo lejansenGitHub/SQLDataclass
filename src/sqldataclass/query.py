@@ -28,7 +28,7 @@ def _fast_construct(cls: type, data: Any) -> Any:
         non_col: frozenset[str] = getattr(cls, "__non_column_fields__", frozenset())
         for fname in non_col:
             if fname not in obj.__dict__:
-                finfo = cls.model_fields.get(fname)  # type: ignore[attr-defined]
+                finfo = cls.model_fields.get(fname)  # type: ignore[attr-defined]  # pydantic model_fields exists at runtime
                 if finfo is not None and finfo.default is not None:
                     obj.__dict__[fname] = finfo.default
         return obj
@@ -51,7 +51,7 @@ def load_all[T](conn: Connection, query: Executable, cls: type[T]) -> list[T]:
         defaults: dict[str, Any] = {}
         if non_col:
             for fname in non_col:
-                finfo = cls.model_fields.get(fname)  # type: ignore[attr-defined]
+                finfo = cls.model_fields.get(fname)  # type: ignore[attr-defined]  # pydantic model_fields exists at runtime
                 if finfo is not None and finfo.default is not None:
                     defaults[fname] = finfo.default
         results: list[T] = []
@@ -85,5 +85,5 @@ def select_columns(*table_classes: type) -> Executable:
     """Build a select() with all columns from the given ORM-mapped classes."""
     columns = []
     for cls in table_classes:
-        columns.extend(cls.__table__.columns)  # type: ignore[attr-defined]
+        columns.extend(cls.__table__.columns)  # type: ignore[attr-defined]  # SA table attrs set dynamically by metaclass
     return select(*columns)

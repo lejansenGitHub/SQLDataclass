@@ -76,8 +76,8 @@ def upsert_row_returning(
         stmt = stmt.on_conflict_do_update(index_elements=index_elements, set_=update_columns)
     else:
         stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
-    stmt = stmt.returning(target_table)
-    result = conn.execute(stmt)
+    returning_stmt = stmt.returning(target_table)
+    result = conn.execute(returning_stmt)
     row = result.mappings().fetchone()
     if row:
         for key, value in row.items():
@@ -86,6 +86,8 @@ def upsert_row_returning(
 
 def _server_defaulted_columns(table_class: type) -> frozenset[str]:
     """Return column names that have server defaults or are autoincrement PKs."""
+    if not hasattr(table_class, "__table__"):
+        return frozenset()
     target_table = table(table_class)
     return frozenset(
         col.name

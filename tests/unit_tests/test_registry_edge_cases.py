@@ -53,7 +53,7 @@ class TestBaseSubclass:
             __tablename__ = "temp_base_test"
             id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-        tbl: Table = _Temp.__table__  # type: ignore[assignment]
+        tbl: Table = _Temp.__table__  # type: ignore[assignment]  # SA table attrs set dynamically by metaclass
         assert tbl is not None
         assert tbl.name == "temp_base_test"
         column_names = {c.name for c in tbl.columns}
