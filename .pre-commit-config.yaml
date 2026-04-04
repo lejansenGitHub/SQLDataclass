@@ -15,40 +15,64 @@ repos:
         pass_filenames: false
         types: [python]
 
-  - repo: https://github.com/pre-commit/pygrep-hooks
-    rev: v1.10.0
-    hooks:
-      - id: python-check-blanket-type-ignore
-        name: no-bare-type-ignore
-      - id: python-check-blanket-noqa
-        name: noqa-needs-code
+      # --- pygrep rules ---
 
-  - repo: local
-    hooks:
-      - id: type-ignore-needs-reason
-        name: type-ignore-needs-reason
-        entry: '# type: ignore\[[\w-]+(,\s*[\w-]+)*\]\s*$'
+      - id: no-bare-type-ignore
+        name: "type: ignore must have [code]"
         language: pygrep
+        entry: '#\s*type:\s*ignore(?!\[)'
         types: [python]
-        description: "type: ignore[code] must have a trailing reason comment"
+
+      - id: type-ignore-needs-reason
+        name: "type: ignore[code] needs reason comment"
+        language: pygrep
+        entry: '#\s*type:\s*ignore\[[^\]]+\]\s*$'
+        types: [python]
+
+      - id: noqa-needs-code
+        name: "noqa must have error code"
+        language: pygrep
+        entry: '#\s*noqa\s*$'
+        types: [python]
 
       - id: noqa-needs-reason
-        name: noqa-needs-reason
-        entry: '# noqa: [A-Z]+[0-9]+\s*$'
+        name: "noqa needs reason comment"
         language: pygrep
+        entry: '#\s*noqa:\s*[A-Z]\w+\s*$'
         types: [python]
-        description: "noqa: CODE must have a trailing reason comment"
+
+      # --- linter scripts ---
+
+      - id: mock-requires-spec
+        name: "MagicMock must use spec="
+        entry: .venv/bin/python -m linter_scripts.mock_requires_spec
+        language: system
+        types: [python]
+        files: tests/
+
+      - id: test-structure-convention
+        name: "test structure convention (docstring + sections)"
+        entry: .venv/bin/python -m linter_scripts.test_structure_convention
+        language: system
+        types: [python]
+        files: tests/unit_tests/.*test_
+
+      # --- unit tests on commit ---
 
       - id: unit-tests
-        name: unit-tests
+        name: unit tests
         entry: .venv/bin/pytest tests/ -m "not integration and not performance" -x -q
         language: system
         pass_filenames: false
         types: [python]
+        always_run: true
+
+      # --- coverage (pre-push only) ---
 
       - id: diff-cover
-        name: diff-cover
+        name: "diff-cover: new/changed lines must be covered"
         entry: bash -c '.venv/bin/pytest tests/ -m "not integration and not performance" --cov=sqldataclass --cov-report=xml -q && .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=80'
         language: system
         pass_filenames: false
         stages: [pre-push]
+        always_run: true

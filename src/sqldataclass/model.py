@@ -116,6 +116,8 @@ _STI_CHILD_CONFIG = ConfigDict(
     ignored_types=(CyFunctionDetector,),
 )
 
+_MAX_RELATIONSHIP_DEPTH = 5
+
 # ---------------------------------------------------------------------------
 # Type mapping: Python type → SQLAlchemy column type
 # ---------------------------------------------------------------------------
@@ -140,7 +142,7 @@ def _unwrap_optional(tp: Any) -> tuple[Any, bool]:
     if origin is types.UnionType:
         args = get_args(tp)
         non_none = [a for a in args if a is not type(None)]
-        if len(non_none) == 1 and len(args) == 2:
+        if len(non_none) == 1 and len(args) == 2:  # noqa: PLR2004  # T | None always has exactly 2 union members
             return non_none[0], True
     return tp, False
 
@@ -726,7 +728,7 @@ def _populate_collections(  # noqa: PLR0912  # many relationship variants requir
     After loading children, recursively populates their relationships too
     (nested relationship loading), up to a max depth to prevent infinite loops.
     """
-    if _depth > 5:  # prevent infinite recursion on circular relationships
+    if _depth > _MAX_RELATIONSHIP_DEPTH:  # prevent infinite recursion on circular relationships
         return
 
     relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
@@ -784,7 +786,7 @@ def _populate_collections(  # noqa: PLR0912  # many relationship variants requir
     # Recursively populate ONLY collection relationships on loaded children.
     # Skip M2M/scalar reloads on children — they weren't explicitly requested.
     # This handles the League → Team → Hero chain without loading hero.tags etc.
-    if all_loaded_children and _depth < 5:
+    if all_loaded_children and _depth < _MAX_RELATIONSHIP_DEPTH:
         by_type: dict[type, list[Any]] = {}
         for child in all_loaded_children:
             by_type.setdefault(type(child), []).append(child)
@@ -856,7 +858,7 @@ def _populate_scalar_chains(objects: list[Any], conn: Connection, *, _depth: int
     collection (one-to-many, many-to-many) loading on nested objects — that
     would be an expensive N+1 pattern for unrelated relationships.
     """
-    if _depth > 5:
+    if _depth > _MAX_RELATIONSHIP_DEPTH:
         return
 
     by_type: dict[type, list[Any]] = {}
