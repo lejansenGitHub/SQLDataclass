@@ -1506,8 +1506,8 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         return result.rowcount
 
     def _model_to_dict(self: Any, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]:
-        """Convert to a flat dict suitable for SQL insertion."""
-        return _flatten_for_table(self, exclude_keys=exclude_keys)
+        """Convert to a flat dict of all column fields, including None values."""
+        return _flatten_for_table(self, exclude_keys=exclude_keys, strip_server_defaults=False)
 
     cls.select = classmethod(_select)
     cls.load_all = classmethod(_model_load_all)
