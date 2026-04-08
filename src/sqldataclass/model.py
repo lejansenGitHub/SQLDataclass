@@ -1021,6 +1021,20 @@ class SQLDataclassMeta(type):
             inherited: type = _build_sti_child(mcs, name, bases, namespace, sti_parent)
             return inherited
 
+        # Response model: table=False child of table=True parent
+        table_parent = _find_table_parent(bases)
+        if table_parent is not None and not table:
+            exclude = kwargs.pop("exclude", None) or frozenset()
+            response: type = _build_response_model(
+                mcs,
+                name,
+                bases,
+                namespace,
+                table_parent,
+                exclude=frozenset(exclude),
+            )
+            return response
+
         # Re-entry guard: pydantic_dataclass with slots=True internally calls
         # type(cls)(name, bases, ns) which re-enters this metaclass.
         qualname = f"{namespace.get('__module__', '')}.{name}"
@@ -1064,6 +1078,14 @@ def _find_sti_parent(bases: tuple[type, ...]) -> Any | None:
     """Return the parent class if it has __discriminator__ (STI base)."""
     for base in bases:
         if getattr(base, "__discriminator__", None) is not None:
+            return base
+    return None
+
+
+def _find_table_parent(bases: tuple[type, ...]) -> Any | None:
+    """Return the first base that is a table=True SQLDataclass (without __discriminator__)."""
+    for base in bases:
+        if getattr(base, "__sqldataclass_is_table__", False) and not getattr(base, "__discriminator__", None):
             return base
     return None
 
@@ -1158,6 +1180,75 @@ def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inhe
 
     _attach_convenience_methods(dc_cls)
     _MODEL_REGISTRY[f"{parent_key}__{discriminator_value}"] = dc_cls
+
+    return dc_cls
+
+
+def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signature
+    mcs: type,
+    name: str,
+    bases: tuple[type, ...],
+    namespace: dict[str, Any],
+    parent: Any,
+    *,
+    exclude: frozenset[str] = frozenset(),
+) -> Any:
+    """Build a pure pydantic dataclass that inherits fields from a table=True parent.
+
+    The child has no SQLAlchemy table, no convenience methods (load_all, insert, etc.),
+    and is not registered in the model registry. It is suitable for use as a FastAPI
+    response model.
+    """
+    # Validate exclude against parent fields
+    parent_field_names = set(parent.__pydantic_fields__) if hasattr(parent, "__pydantic_fields__") else set()
+    child_annotations = namespace.get("__annotations__", {})
+    available_fields = parent_field_names | set(child_annotations)
+    unknown = exclude - available_fields
+    if unknown:
+        msg = f"{name}: exclude contains fields not present on parent or child: {unknown}"
+        raise TypeError(msg)
+
+    # Merge parent annotations + defaults into child namespace (same approach as _build_sti_child)
+    parent_relationships: set[str] = set(getattr(parent, "__relationships__", {}))
+
+    parent_annotations: dict[str, Any] = {}
+    if hasattr(parent, "__pydantic_fields__"):
+        for field_name, field_info in parent.__pydantic_fields__.items():
+            if field_name in parent_relationships:
+                continue  # response models don't inherit relationships
+            parent_annotations[field_name] = field_info.annotation
+
+    merged_annotations = {**parent_annotations, **child_annotations}
+
+    # Copy parent defaults for fields not overridden by child
+    for field_name in parent_annotations:
+        if field_name not in namespace and hasattr(parent, "__pydantic_fields__"):
+            pfield = parent.__pydantic_fields__[field_name]
+            if pfield.default is not PydanticUndefined:
+                namespace[field_name] = pfield.default
+            elif pfield.default_factory is not None:
+                namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
+
+    # Apply exclude: remove from annotations and defaults
+    for field_name in exclude:
+        merged_annotations.pop(field_name, None)
+        namespace.pop(field_name, None)
+
+    namespace["__annotations__"] = merged_annotations
+
+    # Build on clean bases to avoid inheriting table machinery via MRO
+    qualname = f"{namespace.get('__module__', '')}.{name}"
+    _BUILDING.add(qualname)
+    try:
+        clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
+        cls: Any = type.__new__(mcs, name, clean_bases, namespace)
+        dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
+    finally:
+        _BUILDING.discard(qualname)
+
+    dc_cls.__sqldataclass_is_table__ = False
+    dc_cls.__relationships__ = {}
+    dc_cls.__non_column_fields__ = frozenset()
 
     return dc_cls
 
