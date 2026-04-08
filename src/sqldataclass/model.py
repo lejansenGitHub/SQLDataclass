@@ -1466,7 +1466,8 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         row = result.mappings().fetchone()
         if row:
             for key, value in row.items():
-                object.__setattr__(self, key, value)
+                if hasattr(self, key):
+                    object.__setattr__(self, key, value)
 
     def _model_upsert(self: Any, conn: Connection | None = None, *, index_elements: list[str]) -> None:
         """Upsert (PostgreSQL ON CONFLICT) this instance.

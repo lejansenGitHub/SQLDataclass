@@ -81,7 +81,8 @@ def upsert_row_returning(
     row = result.mappings().fetchone()
     if row:
         for key, value in row.items():
-            object.__setattr__(instance, key, value)
+            if hasattr(instance, key):
+                object.__setattr__(instance, key, value)
 
 
 def _server_defaulted_columns(table_class: type) -> frozenset[str]:
