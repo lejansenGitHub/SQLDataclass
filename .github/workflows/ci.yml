@@ -14,7 +14,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - run: ruff check src/sqldataclass/
       - run: ruff format --check src/sqldataclass/
 
@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - run: mypy src/sqldataclass/
 
   unit-tests:
@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - run: pytest tests/ -m "not integration and not performance" --cov=sqldataclass --cov-report=xml -x -v
       - uses: actions/upload-artifact@v4
         if: always()
@@ -50,7 +50,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - run: pytest tests/ -m integration -x -v
 
   diff-cover:
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
       - uses: actions/download-artifact@v4
         with:
           name: coverage-xml
