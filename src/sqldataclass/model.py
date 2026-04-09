@@ -1218,14 +1218,17 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
         raise TypeError(msg)
 
     # Merge parent annotations + defaults into child namespace (same approach as _build_sti_child)
+    # Use get_type_hints with include_extras=True to preserve Annotated metadata (e.g. UnitMeta),
+    # since pydantic's field_info.annotation strips the Annotated wrapper.
     parent_relationships: set[str] = set(getattr(parent, "__relationships__", {}))
 
     parent_annotations: dict[str, Any] = {}
-    if hasattr(parent, "__pydantic_fields__"):
-        for field_name, field_info in parent.__pydantic_fields__.items():
-            if field_name in parent_relationships:
-                continue  # response models don't inherit relationships
-            parent_annotations[field_name] = field_info.annotation
+    original_hints = get_type_hints(parent, include_extras=True) if hasattr(parent, "__pydantic_fields__") else {}
+    for field_name in parent.__pydantic_fields__ if hasattr(parent, "__pydantic_fields__") else ():
+        if field_name in parent_relationships:
+            continue  # response models don't inherit relationships
+        if field_name in original_hints:
+            parent_annotations[field_name] = original_hints[field_name]
 
     merged_annotations = {**parent_annotations, **child_annotations}
 
