@@ -43,6 +43,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     ClassVar,
     Literal,
@@ -162,6 +163,14 @@ def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
     # Literal["foo", "bar"] → String
     if get_origin(inner) is Literal:
         return String
+
+    # Annotated[X, ...] → unwrap to X
+    if get_origin(inner) is Annotated:
+        inner = get_args(inner)[0]
+
+    # NewType("Kilometers", float) → unwrap to float
+    while hasattr(inner, "__supertype__"):
+        inner = inner.__supertype__
 
     sa_type = _TYPE_MAP.get(inner)
     if sa_type is None:
