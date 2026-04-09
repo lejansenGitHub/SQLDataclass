@@ -1250,6 +1250,19 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
     dc_cls.__relationships__ = {}
     dc_cls.__non_column_fields__ = frozenset()
 
+    def _from_parent(cls: Any, /, parent_instance: Any, **overrides: Any) -> Any:
+        """Construct this response model from a parent (table=True) instance.
+
+        Takes the parent's field values, keeps only the fields that exist
+        on this child, and applies any keyword overrides.
+        """
+        own_fields = set(cls.__pydantic_fields__)
+        data = {key: value for key, value in parent_instance.to_dict().items() if key in own_fields}
+        data.update(overrides)
+        return cls(**data)
+
+    dc_cls.from_parent = classmethod(_from_parent)
+
     return dc_cls
 
 

@@ -243,3 +243,39 @@ def test_chained_response_model() -> None:
     assert "length" in UsResponse.__pydantic_fields__
     response = UsResponse(name="test", length=5, voltage=10.0)
     assert isinstance(response.length, int)
+
+
+# --- from_parent ---
+
+
+def test_from_parent_basic() -> None:
+    """
+    from_parent constructs a response model from a table=True parent instance,
+    keeping only the fields the child has (dropping excluded fields like id).
+    """
+    parent = RmParent(id=42, name="test", length=12.4, voltage=10.0)
+
+    # --- Execute ---
+    response = RmResponseExcludeId.from_parent(parent)
+
+    # --- Assert ---
+    assert response.name == "test"
+    assert response.length == 12.4
+    assert response.voltage == 10.0
+    assert not hasattr(response, "id")
+
+
+def test_from_parent_with_overrides() -> None:
+    """
+    Keyword overrides replace specific field values — used for unit conversion
+    (e.g. converting km to miles before constructing the US response).
+    """
+    parent = RmParent(id=1, name="cable", length=10.0, voltage=20.0)
+
+    # --- Execute ---
+    response = RmResponseOverride.from_parent(parent, length=6)
+
+    # --- Assert ---
+    assert response.length == 6
+    assert isinstance(response.length, int)
+    assert response.name == "cable"
