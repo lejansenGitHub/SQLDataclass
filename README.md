@@ -278,12 +278,49 @@ class Team(SQLDataclass, table=True):
 class Hero(SQLDataclass, table=True):
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    team_id: int = Field(foreign_key="team.id")
     team: Team | None = Relationship()  # auto-JOINed on load
 
 hero = Hero.load_one(where=Hero.c.name == "Spider-Man")
 print(hero.team.name)  # "Avengers"
 ```
+
+The FK column (`team_id`) is created automatically from the relationship declaration. If you need to control the column name or set the FK without loading the full object, declare it explicitly:
+
+```python
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    team_id: int = Field(foreign_key="team.id")  # explicit FK
+    team: Team | None = Relationship()
+```
+
+### Cascading insert
+
+When inserting a model with many-to-one relationships, related objects are inserted automatically. Unpersisted related objects (PK is `None`) are inserted first, and their generated PK is copied into the FK column — no manual ordering required:
+
+```python
+avengers = Team(name="Avengers")
+hero = Hero(name="Spider-Man", team=avengers)
+hero.insert()  # inserts avengers first, then hero with team_id set
+
+print(avengers.id)  # 1 — PK populated by the DB
+print(hero.team_id)  # 1 — FK set automatically
+```
+
+Already-persisted related objects (PK is not `None`) are not re-inserted — only the FK is copied:
+
+```python
+avengers = Team(name="Avengers")
+avengers.insert()  # insert separately
+
+hero1 = Hero(name="Iron Man", team=avengers)
+hero1.insert()  # avengers already has a PK, so only hero1 is inserted
+
+hero2 = Hero(name="Thor", team=avengers)
+hero2.insert()  # same — avengers is not inserted again
+```
+
+Cascading insert works recursively for nested relationships and has zero ongoing memory cost — it's a one-shot tree walk at insert time, not a session or identity map.
 
 ### One-to-many
 
@@ -583,6 +620,8 @@ SQLDataclass intentionally trades some ORM features for memory efficiency and si
 | ~~No relationship ordering~~ | **Fixed in v0.0.8** — `Relationship(order_by="name")` |
 | ~~No single-table inheritance~~ | **Fixed in v0.1.1** — `class Car(Vehicle):` with `__discriminator__` |
 | ~~Composite PKs don't work with collection relationships~~ | **Fixed in v0.1.0** |
+| ~~No cascading insert~~ | **Fixed in v0.1.5** — `insert()` auto-inserts unpersisted many-to-one relationships |
+| ~~FK column must be declared explicitly~~ | **Fixed in v0.1.5** — `Relationship()` auto-creates the `_id` FK column |
 | **No identity map** (by design) — loading the same row twice creates separate objects | Immutable dataclass pattern; cache at application level if needed |
 | ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |
 | **Eager-only collections** (by design) — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
