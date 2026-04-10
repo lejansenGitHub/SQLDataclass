@@ -1,6 +1,6 @@
 [project]
 name = "sqldataclass"
-version = "0.1.5"
+version = "0.1.6"
 description = "Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible."
 readme = "README.md"
 license = "MIT"
@@ -62,6 +62,11 @@ find-links = ["vendor/"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "sqlmodel>=0.0.38",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqldataclass"]
