@@ -39,6 +39,7 @@ from sqldataclass.model import (
     _build_table,
     _default_tablename,
     _get_sa_info,
+    _inject_implicit_fk_fields,
     _is_relationship,
     _resolve_relationships,
     _ResolvedRelationship,
@@ -130,6 +131,10 @@ class SQLModel(pydantic.BaseModel):
             all_hints = dict(cls.__annotations__)
         instance_field_names = set(cls.model_fields) | relationship_fields
         resolved = {k: v for k, v in all_hints.items() if k in instance_field_names}
+
+        # Auto-create implicit FK fields for many-to-one relationships
+        annotations = dict(cls.__annotations__)
+        _inject_implicit_fk_fields(resolved, namespace, annotations, relationship_fields)
 
         # Build SA table
         sa_table: Table = _build_table(

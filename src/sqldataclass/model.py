@@ -442,6 +442,57 @@ def _build_sa_column(
     return Column(*col_args, **col_kwargs)
 
 
+def _inject_implicit_fk_fields(
+    resolved_hints: dict[str, Any],
+    namespace: dict[str, Any],
+    annotations: dict[str, Any],
+    relationship_fields: set[str],
+) -> None:
+    """Auto-create ``{name}_id`` FK fields for many-to-one relationships that lack an explicit FK.
+
+    Mutates *resolved_hints*, *namespace*, and *annotations* in place.
+    Only acts on scalar (non-list, non-discriminated) relationship fields
+    whose target class has a ``__tablename__`` and a primary-key column.
+    """
+    for field_name in list(relationship_fields):
+        fk_field_name = f"{field_name}_id"
+        if fk_field_name in resolved_hints or fk_field_name in annotations:
+            continue  # explicit FK already declared
+
+        type_hint = resolved_hints.get(field_name)
+        if type_hint is None:
+            continue
+
+        inner, _is_optional = _unwrap_optional(type_hint)
+
+        # Skip collections (one-to-many / many-to-many) and unions (discriminated)
+        if get_origin(inner) is list:
+            continue
+        if get_origin(inner) is types.UnionType:
+            continue
+
+        # inner should be the target model class
+        target_tablename = getattr(inner, "__tablename__", None)
+        if target_tablename is None:
+            continue
+
+        # Find the PK column name on the target table
+        target_table = getattr(inner, "__table__", None)
+        if target_table is None:
+            continue
+        pk_cols = [col.name for col in target_table.primary_key.columns]
+        if len(pk_cols) != 1:
+            continue  # skip composite PKs
+        pk_name = pk_cols[0]
+
+        # Inject the FK field
+        fk_target = f"{target_tablename}.{pk_name}"
+        fk_field_info = Field(default=None, foreign_key=fk_target)
+        resolved_hints[fk_field_name] = int | None
+        annotations[fk_field_name] = "int | None"
+        namespace[fk_field_name] = fk_field_info
+
+
 def _build_table(
     tablename: str,
     resolved_hints: dict[str, Any],
@@ -1332,6 +1383,9 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         except Exception:
             resolved = dict(annotations)
 
+        # Auto-create implicit FK fields for many-to-one relationships
+        _inject_implicit_fk_fields(resolved, namespace, annotations, relationship_fields)
+
         sa_table = _build_table(
             tablename,
             resolved,
@@ -1462,6 +1516,51 @@ def _apply_discriminator_on_insert(klass: Any, flat: dict[str, Any]) -> dict[str
     return flat
 
 
+def _insert_relationships(instance: Any, conn: Connection) -> None:
+    """Cascade-insert many-to-one relationships before the parent INSERT.
+
+    For each many-to-one relationship field that holds a non-None value whose
+    PK is not yet set, insert the related object and copy its PK into the
+    FK column on the parent instance.
+    """
+    rels: dict[str, _ResolvedRelationship] = getattr(type(instance), "__relationships__", {})
+    fk_map: dict[str, Column[Any]] = getattr(type(instance), "__fk_map__", {})
+
+    for rel in rels.values():
+        if rel.kind != "many_to_one":
+            continue
+
+        related = getattr(instance, rel.field_name, None)
+        if related is None:
+            continue
+
+        # Check if the related object needs inserting (PK is None)
+        target_table = getattr(type(related), "__table__", None)
+        if target_table is None:
+            continue
+        pk_cols = [col.name for col in target_table.primary_key.columns]
+        if len(pk_cols) != 1:
+            continue
+        pk_name = pk_cols[0]
+
+        pk_value = getattr(related, pk_name, None)
+        if pk_value is not None:
+            # Already persisted — just ensure the FK is set
+            fk_col = fk_map.get(target_table.name)
+            if fk_col is not None:
+                object.__setattr__(instance, fk_col.name, pk_value)
+            continue
+
+        # Recursively insert the related object (handles nested relationships)
+        related.insert(conn)
+
+        # Copy the generated PK into the FK field
+        pk_value = getattr(related, pk_name)
+        fk_col = fk_map.get(target_table.name)
+        if fk_col is not None:
+            object.__setattr__(instance, fk_col.name, pk_value)
+
+
 def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches many methods in one pass
     """Attach query/write convenience methods to a table class."""
 
@@ -1569,6 +1668,9 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
     def _model_insert(self: Any, conn: Connection | None = None) -> None:
         """Insert this instance into the database.
 
+        Cascades: many-to-one relationship values that have no PK are inserted
+        first, and their generated PK is copied into the FK column.
+
         Uses RETURNING to populate DB-generated fields (e.g. autoincrement id,
         server defaults) on the instance in place.
         """
@@ -1576,6 +1678,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
             with _get_engine(type(self)).begin() as auto_conn:
                 _model_insert(self, auto_conn)
                 return
+        _insert_relationships(self, conn)
         flat = _apply_discriminator_on_insert(type(self), _flatten_for_table(self))
         target_table = type(self).__table__
         result = conn.execute(target_table.insert().values(flat).returning(target_table))
