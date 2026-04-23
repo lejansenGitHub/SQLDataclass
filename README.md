@@ -9,6 +9,13 @@ Define your models once — like SQLModel — but get the memory footprint of pl
 > All benchmarks run on SQLite with 10,000 rows and 20 fields per row.
 > Reproducible via `src/sqldataclass/tests/performance_tests/`.
 
+The benchmarks below compare two model types from this package:
+
+- **`SQLDataclass`** — built on pydantic dataclasses with `slots=True`. Minimal memory overhead, no `__dict__`.
+- **`SQLDataclass SQLModel`** — built on Pydantic `BaseModel`. Same SQL table mapping and convenience methods, but gives you the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.). Imported as `from sqldataclass import SQLModel`.
+
+Both are compared against SQLAlchemy ORM and [tiangolo's SQLModel](https://github.com/fastapi/sqlmodel).
+
 ### Object construction (20 fields, 10k objects, no DB)
 
 | Approach | B/row | Time |
@@ -607,36 +614,15 @@ For advanced use cases, the underlying bridge functions are also available:
 5. **FastAPI native** — pydantic dataclasses work as response models out of the box
 6. **Escape hatches** — low-level bridge API available when you need full control
 
-## Known limitations
-
-SQLDataclass intentionally trades some ORM features for memory efficiency and simplicity. Here's what it doesn't do (yet):
-
-| Limitation | Workaround |
-|---|---|
-| **No lazy loading** (by design) — relationships are always eager-loaded | Use `.select()` + low-level `load_all()` to control what's loaded |
-| ~~No `update()` or `delete()` methods~~ | **Fixed in v0.0.6** |
-| ~~No pagination in `load_all`~~ | **Fixed in v0.0.7** — `Hero.load_all(limit=10, offset=20)` |
-| ~~No nested relationship loading~~ | **Fixed in v0.1.0** — `hero.team.league` auto-loads recursively |
-| ~~No relationship ordering~~ | **Fixed in v0.0.8** — `Relationship(order_by="name")` |
-| ~~No single-table inheritance~~ | **Fixed in v0.1.1** — `class Car(Vehicle):` with `__discriminator__` |
-| ~~Composite PKs don't work with collection relationships~~ | **Fixed in v0.1.0** |
-| ~~No cascading insert~~ | **Fixed in v0.1.5** — `insert()` auto-inserts unpersisted many-to-one relationships |
-| ~~FK column must be declared explicitly~~ | **Fixed in v0.1.5** — `Relationship()` auto-creates the `_id` FK column |
-| **No identity map** (by design) — loading the same row twice creates separate objects | Immutable dataclass pattern; cache at application level if needed |
-| ~~`bind()` is global~~ | **Fixed in v0.0.9** — `Hero.bind(engine_a)`, `Team.bind(engine_b)` |
-| **Eager-only collections** (by design) — one-to-many/many-to-many always load all children | Filter at query level or use low-level bridge API |
-
 ## Acknowledgements
 
 SQLDataclass was born from combining two lines of work:
 
 **[SQLModel](https://github.com/fastapi/sqlmodel)** by Sebastián Ramírez and its contributors provided the inspiration for the single-class API — one model definition that serves as both the database schema and the pydantic data model. SQLDataclass recreates this developer experience while targeting lower memory consumption by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
 
-**Prior research by Marcel Spitz, Kai Habermann, and Christian Siebert** on pydantic memory and runtime performance — conducted in a separate project with Lennart Jansen — established that pydantic dataclasses with `slots=True` achieve the same memory footprint as stdlib dataclasses while retaining full validation. These findings (12.8x less memory than BaseModel, 5.9x less than ORM instances) became the empirical foundation for SQLDataclass's architecture. The goal was to combine these results with SQLModel's ergonomics.
-
 ## Requirements
 
-- Python 3.13+
+- Python 3.11+
 - pydantic >= 2.0
 - sqlalchemy >= 2.0
 
