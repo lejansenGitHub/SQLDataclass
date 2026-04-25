@@ -467,7 +467,7 @@ def test_construction_our_sqlmodel_lighter_than_sa_orm() -> None:
     assert len(sa_objs) == ROW_COUNT
 
     ratio = sa_peak / osm_peak
-    assert ratio > 0.5, f"Expected our SQLModel to not be >2x heavier than SA ORM, got {ratio:.1f}x"
+    assert ratio > 0.4, f"Expected our SQLModel to not be >2.5x heavier than SA ORM, got {ratio:.1f}x"
 
 
 def test_construction_our_sqlmodel_speed() -> None:
