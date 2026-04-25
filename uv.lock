@@ -13,10 +13,10 @@ wheels = [
 
 [[package]]
 name = "blueprint-linters"
-version = "0.8.0"
+version = "0.10.0"
 source = { registry = "vendor" }
 wheels = [
-    { path = "blueprint_linters-0.8.0-py3-none-any.whl" },
+    { path = "blueprint_linters-0.10.0-py3-none-any.whl" },
 ]
 
 [[package]]
@@ -976,7 +976,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "blueprint-linters", marker = "extra == 'dev'", specifier = ">=0.8.0" },
+    { name = "blueprint-linters", marker = "extra == 'dev'", specifier = ">=0.10.0" },
     { name = "diff-cover", marker = "extra == 'dev'", specifier = ">=9.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.14" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0" },

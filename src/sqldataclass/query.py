@@ -7,11 +7,13 @@ domain objects inline during cursor iteration, avoiding the intermediate
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql import Executable
+
+_T = TypeVar("_T")
 
 
 def _fast_construct(cls: type, data: Any) -> Any:
@@ -38,7 +40,7 @@ def _fast_construct(cls: type, data: Any) -> Any:
     return cls(**data)
 
 
-def load_all[T](conn: Connection, query: Executable, cls: type[T]) -> list[T]:
+def load_all(conn: Connection, query: Executable, cls: type[_T]) -> list[_T]:
     """Execute query and construct domain objects directly — no intermediate list[dict].
 
     Each row is converted to a domain object inline as the cursor is iterated,
@@ -54,7 +56,7 @@ def load_all[T](conn: Connection, query: Executable, cls: type[T]) -> list[T]:
                 finfo = cls.model_fields.get(fname)  # type: ignore[attr-defined]  # pydantic model_fields exists at runtime
                 if finfo is not None and finfo.default is not None:
                     defaults[fname] = finfo.default
-        results: list[T] = []
+        results: list[_T] = []
         for row in conn.execute(query).mappings():
             obj = object.__new__(cls)
             obj.__dict__.update(row)

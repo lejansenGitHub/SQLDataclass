@@ -1,6 +1,6 @@
 [project]
 name = "sqldataclass"
-version = "0.1.8"
+version = "0.1.9"
 description = "Memory-efficient ORM bridge: pydantic dataclasses + SQLAlchemy Core. FastAPI compatible."
 readme = "README.md"
 license = "MIT"
@@ -50,7 +50,7 @@ dev = [
     "ruff>=0.15",
     "mypy>=1.14",
     "pre-commit>=4.0",
-    "blueprint-linters>=0.8.0",
+    "blueprint-linters>=0.10.0",
 ]
 
 [project.urls]

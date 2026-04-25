@@ -616,9 +616,7 @@ For advanced use cases, the underlying bridge functions are also available:
 
 ## Acknowledgements
 
-SQLDataclass was born from combining two lines of work:
-
-**[SQLModel](https://github.com/fastapi/sqlmodel)** by Sebastián Ramírez and its contributors provided the inspiration for the single-class API — one model definition that serves as both the database schema and the pydantic data model. SQLDataclass recreates this developer experience while targeting lower memory consumption by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
+Inspired by **[SQLModel](https://github.com/fastapi/sqlmodel)** by Sebastián Ramírez — I would have loved to use it directly, but its memory consumption was too high for my use case. SQLDataclass recreates SQLModel's single-class developer experience while targeting lower memory consumption by building on pydantic dataclasses and SQLAlchemy Core instead of the full ORM.
 
 ## Requirements
 

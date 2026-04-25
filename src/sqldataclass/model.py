@@ -49,6 +49,7 @@ from typing import (
     Literal,
     Self,
     Sequence,
+    TypeVar,
     dataclass_transform,
     get_args,
     get_origin,
@@ -102,6 +103,8 @@ from sqldataclass.versioning import (
 from sqldataclass.write import flatten_for_table as _flatten_for_table
 from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import upsert_row_returning as _upsert_row_returning
+
+_T = TypeVar("_T")
 
 _DATACLASS_CONFIG = ConfigDict(
     allow_inf_nan=False,
@@ -1478,7 +1481,7 @@ def _get_engine(cls: Any) -> Engine:
 # ---------------------------------------------------------------------------
 
 
-def _polymorphic_load[T](conn: Connection, query: Any, cls: type[T]) -> list[T]:
+def _polymorphic_load(conn: Connection, query: Any, cls: type[_T]) -> list[_T]:
     """Load rows, constructing the correct STI subtype for each row if applicable."""
     sti_registry = getattr(cls, "__sqldataclass_sti_registry__", None)
     sti_column = getattr(cls, "__sqldataclass_sti_column__", None)
@@ -1488,7 +1491,7 @@ def _polymorphic_load[T](conn: Connection, query: Any, cls: type[T]) -> list[T]:
         return _load_all(conn, query, cls)
 
     # Polymorphic: pick the right subtype per row
-    results: list[T] = []
+    results: list[_T] = []
     for row in conn.execute(query).mappings():
         disc_value = row.get(sti_column)
         target_cls = sti_registry.get(disc_value, cls)
