@@ -64,6 +64,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from sqlalchemy import (
     ARRAY,
+    JSON,
     Boolean,
     Column,
     Date,
@@ -133,6 +134,7 @@ _TYPE_MAP: dict[type, type[TypeEngine[Any]]] = {
     str: String,
     bool: Boolean,
     bytes: LargeBinary,
+    dict: JSON,
     datetime: DateTime,
     date: Date,
     time: Time,
@@ -191,6 +193,10 @@ def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]] | TypeEngine[Any]:
             f"Cannot map Python type {tp!r} to a SQLAlchemy ARRAY type. "
             f"Use Field(sa_type=ARRAY(...)) to specify the element type explicitly."
         )
+
+    # dict[K, V] → JSON (bare dict is handled by _TYPE_MAP below)
+    if get_origin(inner) is dict:
+        return JSON
 
     sa_type = _TYPE_MAP.get(inner)
     if sa_type is None:
