@@ -25,7 +25,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]" vendor/blueprint_linters-*.whl
+      - run: pip install -e ".[dev,postgres]" vendor/blueprint_linters-*.whl
       - run: mypy src/sqldataclass/
 
   unit-tests:
