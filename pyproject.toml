@@ -169,7 +169,7 @@ module = ["sqldataclass.*"]
 disable_error_code = ["explicit-any"]
 
 [[tool.mypy.overrides]]
-module = ["pytest.*", "alembic.*", "sqlmodel.*"]
+module = ["pytest.*", "alembic.*", "sqlmodel.*", "psycopg.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
