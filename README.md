@@ -158,6 +158,9 @@ hero = Hero.load_one(where=Hero.c.name == "Spider-Man")
 
 # Order
 heroes = Hero.load_all(where=Hero.c.age > 25, order_by=Hero.c.name)
+
+# Pagination
+page = Hero.load_all(order_by=Hero.c.name, limit=20, offset=40)  # rows 41-60
 ```
 
 ### Explicit connections (when you need transaction control)
@@ -471,6 +474,26 @@ def create_hero(data: HeroCreate):
     return hero
 ```
 
+### Response models (field subsetting)
+
+Inherit from a `table=True` model without `table=True` to create a response model that shares its fields but has no database table. Use `exclude=` to drop sensitive fields:
+
+```python
+class HeroPublic(Hero, exclude={"secret_name"}):
+    """Public API response — secret_name excluded."""
+
+class HeroWithTeam(Hero):
+    """Response model that adds a computed field."""
+    display_name: str = ""
+
+# Construct from a loaded instance
+hero = Hero.load_one(where=Hero.c.id == 1)
+public = HeroPublic.from_parent(hero)                     # secret_name removed
+rich = HeroWithTeam.from_parent(hero, display_name="!!")  # extra field added
+```
+
+Response models inherit all parent fields (minus excluded ones), get `from_parent()` for easy conversion, and work directly as FastAPI response types.
+
 ## Field options
 
 `Field()` accepts both pydantic and SQLAlchemy parameters:
@@ -495,11 +518,32 @@ class User(SQLDataclass, table=True):
 | `foreign_key` | `str` | Foreign key reference (e.g. `"users.id"`) |
 | `nullable` | `bool` | Override nullable inference |
 | `sa_type` | `TypeEngine` | Override SQLAlchemy column type |
+| `server_default` | `str` | SQL expression for DB-generated default (e.g. `"NOW()"`) |
 | `default` | `Any` | Default value |
 | `ge`, `le`, `gt`, `lt` | `float` | Pydantic numeric validators |
 | `min_length`, `max_length` | `int` | Pydantic string validators |
 | `pattern` | `str` | Pydantic regex pattern |
 | `column` | `bool` | `False` = field exists on Python object but not in DB |
+
+**Automatic type mapping:** Python types are mapped to SQLAlchemy column types automatically. Use `sa_type` only when you need to override the default.
+
+| Python type | SQLAlchemy type |
+|---|---|
+| `int` | `Integer` |
+| `float` | `Float` |
+| `str` | `String` |
+| `bool` | `Boolean` |
+| `bytes` | `LargeBinary` |
+| `datetime` | `DateTime` |
+| `date` | `Date` |
+| `time` | `Time` |
+| `Decimal` | `Numeric` |
+| `UUID` | `Uuid` |
+| `dict` / `dict[str, V]` | `JSON` |
+| `list[T]` | `ARRAY(T)` |
+| `T \| None` | same type, `nullable=True` |
+
+**Table name inference:** if `__tablename__` is not set, it is derived from the class name: `CamelCase` becomes `camel_case` (e.g. `TransformerType` becomes `transformer_type`).
 
 ## Relationship options
 
@@ -623,7 +667,7 @@ employee.insert(conn)
 # Inserts into person table first (gets auto-generated id), then employees table
 ```
 
-The child's `.c` column accessor resolves both parent and child columns, so WHERE/ORDER BY clauses work on either.
+The child's `.c` column accessor resolves both parent and child columns, so WHERE/ORDER BY clauses work on either. `update()` and `delete()` automatically route fields to the correct table. `upsert()` is not supported on JTI children — use `insert()` or `update()` instead.
 
 Multi-level inheritance works too — `Manager(Employee(Person))` chains JOINs through all ancestor tables automatically.
 
@@ -735,14 +779,14 @@ All methods accept an optional `conn` parameter. If omitted, a connection is aut
 |---|---|---|
 | `SQLDataclass.bind(engine)` | classmethod | Bind engine — makes `conn` optional everywhere |
 | `Model.select()` | classmethod | Build a `SELECT` query |
-| `Model.load_all(conn=, where=, order_by=)` | classmethod | Load all matching rows with relationships |
+| `Model.load_all(conn=, where=, order_by=, limit=, offset=)` | classmethod | Load matching rows with relationships, pagination |
 | `Model.load_one(conn=, where=)` | classmethod | Load one row or `None` |
-| `Model.insert_many(conn=, objects=)` | classmethod | Bulk insert |
+| `Model.insert_many(conn=, objects=)` | classmethod | Bulk insert (batched for JTI) |
 | `Model.update(values, conn=, where=)` | classmethod | Update matching rows, returns count |
 | `Model.delete(conn=, where=)` | classmethod | Delete matching rows, returns count |
-| `instance.insert(conn=)` | instance | Insert this row |
-| `instance.to_dict(exclude_keys=)` | instance | Flat dict for SQL |
-| `instance.upsert(conn=, index_elements=)` | instance | PostgreSQL upsert |
+| `instance.insert(conn=)` | instance | Insert this row (cascading for JTI) |
+| `instance.to_dict(exclude_keys=)` | instance | Flat dict of all column fields |
+| `instance.upsert(conn=, index_elements=)` | instance | PostgreSQL upsert (not supported on JTI children) |
 | `Model.c` | attribute | Column access for WHERE clauses |
 | `Model.metadata` | attribute | SQLAlchemy MetaData |
 
