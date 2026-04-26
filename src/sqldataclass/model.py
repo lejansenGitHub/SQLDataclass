@@ -496,17 +496,22 @@ def _inject_implicit_fk_fields(
         namespace[fk_field_name] = fk_field_info
 
 
-def _build_table(
+def _build_table(  # noqa: PLR0913  # internal builder, clarity over arg count
     tablename: str,
     resolved_hints: dict[str, Any],
     namespace: dict[str, Any],
     target_metadata: MetaData,
     *,
     relationship_fields: set[str],
+    table_args: tuple[Any, ...] | None = None,
 ) -> Table:
     """Create a SQLAlchemy ``Table`` from resolved type hints and field defaults.
 
     Fields in *relationship_fields* and fields with ``column=False`` are skipped.
+
+    *table_args* is the value of ``__table_args__`` on the model class, following
+    the SQLAlchemy convention: either a tuple of constraints/indexes optionally
+    ending with a dict of keyword arguments, or a plain dict of keyword arguments.
     """
     columns: list[Column[Any]] = []
     for field_name, type_hint in resolved_hints.items():
@@ -520,7 +525,19 @@ def _build_table(
             continue
         columns.append(_build_sa_column(field_name, type_hint, sa_info))
 
-    return Table(tablename, target_metadata, *columns)
+    extra_args: tuple[Any, ...] = ()
+    table_kwargs: dict[str, Any] = {}
+    if table_args is not None:
+        if isinstance(table_args, dict):
+            table_kwargs = table_args
+        elif isinstance(table_args, tuple):
+            if table_args and isinstance(table_args[-1], dict):
+                extra_args = table_args[:-1]
+                table_kwargs = table_args[-1]
+            else:
+                extra_args = table_args
+
+    return Table(tablename, target_metadata, *columns, *extra_args, **table_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1354,6 +1371,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     """Core logic for building a SQLDataclass (called from metaclass __new__)."""
     annotations = namespace.get("__annotations__", {})
     tablename = namespace.pop("__tablename__", _default_tablename(name))
+    table_args = namespace.pop("__table_args__", None)
     target_metadata = _find_metadata(bases)
 
     # Detect non-column fields and relationships
@@ -1395,6 +1413,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
             namespace,
             target_metadata,
             relationship_fields=relationship_fields,
+            table_args=table_args,
         )
 
         # Resolve relationships (needs resolved type hints)
