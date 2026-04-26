@@ -648,6 +648,31 @@ def _has_join_relationships(relationships: dict[str, _ResolvedRelationship]) -> 
     return any(rel.kind in ("many_to_one", "discriminated") for rel in relationships.values())
 
 
+def _build_jti_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
+    """Build a SELECT that JOINs a JTI child table with its parent table.
+
+    Returns a flat result set with all parent + child columns (excluding the
+    duplicate child PK since it equals the parent PK).
+    """
+    child_table: Table = cls.__table__
+    parent_table: Table = cls.__jti_parent_table__
+    parent_pk = list(parent_table.primary_key.columns)[0]
+    child_pk = list(child_table.primary_key.columns)[0]
+
+    # SELECT all parent columns + child columns (skip child PK to avoid duplicate)
+    columns = list(parent_table.columns)
+    columns.extend(col for col in child_table.columns if not col.primary_key)
+
+    joined = parent_table.join(child_table, parent_pk == child_pk)
+    query = sa_select(*columns).select_from(joined)
+
+    if where is not None:
+        query = query.where(where)
+    if order_by is not None:
+        query = query.order_by(*order_by) if isinstance(order_by, list | tuple) else query.order_by(order_by)
+    return query
+
+
 def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
     """Build a SELECT with labeled columns and JOINs for scalar relationships.
 
@@ -1124,6 +1149,18 @@ class SQLDataclassMeta(type):
             inherited: type = _build_sti_child(mcs, name, bases, namespace, sti_parent)
             return inherited
 
+        # Joined-table inheritance: table=True child of table=True parent (no discriminator)
+        if table:
+            jti_parent = _find_table_parent(bases)
+            if jti_parent is not None:
+                qualname = f"{namespace.get('__module__', '')}.{name}"
+                _BUILDING.add(qualname)
+                try:
+                    jti_child: type = _build_jti_child(mcs, name, bases, namespace, jti_parent)
+                    return jti_child
+                finally:
+                    _BUILDING.discard(qualname)
+
         # Response model: table=False child of table=True parent
         table_parent = _find_table_parent(bases)
         if table_parent is not None and not table:
@@ -1372,6 +1409,184 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
     return dc_cls
 
 
+class _MergedColumns:
+    """Column accessor that checks the child table first, then the parent table.
+
+    Allows ``Employee.c.name`` to resolve a column defined on the parent table.
+    """
+
+    __slots__ = ("_child", "_parent")
+
+    def __init__(self, child_table: Table, parent_table: Table) -> None:
+        object.__setattr__(self, "_child", child_table.c)
+        object.__setattr__(self, "_parent", parent_table.c)
+
+    def __getattr__(self, name: str) -> Column[Any]:
+        try:
+            return getattr(object.__getattribute__(self, "_child"), name)  # type: ignore[no-any-return]  # SA column accessor returns Column
+        except AttributeError:
+            return getattr(object.__getattribute__(self, "_parent"), name)  # type: ignore[no-any-return]  # SA column accessor returns Column
+
+    def __getitem__(self, name: str) -> Column[Any]:
+        try:
+            return object.__getattribute__(self, "_child")[name]  # type: ignore[no-any-return]  # SA column accessor returns Column
+        except KeyError:
+            return object.__getattribute__(self, "_parent")[name]  # type: ignore[no-any-return]  # SA column accessor returns Column
+
+
+def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setup is inherently complex
+    mcs: type,
+    name: str,
+    bases: tuple[type, ...],
+    namespace: dict[str, Any],
+    parent: Any,
+) -> Any:
+    """Build a joined-table inheritance child class.
+
+    The child:
+    - Gets its own SA ``Table`` with only child-specific columns + a PK/FK to the parent
+    - Inherits all parent fields at the Python (pydantic) level
+    - Auto-JOINs the parent table on load
+    - Cascading inserts: parent row first, then child row
+    """
+    # --- Extract table config ---
+    tablename = namespace.pop("__tablename__", _default_tablename(name))
+    table_args = namespace.pop("__table_args__", None)
+    target_metadata = _find_metadata(bases)
+
+    # --- Validate parent PK (single-column only for v1) ---
+    parent_pk_cols = list(parent.__table__.primary_key.columns)
+    if len(parent_pk_cols) != 1:
+        msg = (
+            f"Joined-table inheritance requires a single-column primary key on parent "
+            f"{parent.__name__}, got {len(parent_pk_cols)}"
+        )
+        raise TypeError(msg)
+    parent_pk_col = parent_pk_cols[0]
+    pk_name: str = parent_pk_col.name
+
+    # --- Identify parent and child field sets ---
+    parent_relationships: set[str] = set(getattr(parent, "__relationships__", {}))
+    parent_non_column: set[str] = set(getattr(parent, "__non_column_fields__", ()))
+
+    parent_annotations: dict[str, Any] = {}
+    original_hints = get_type_hints(parent, include_extras=True) if hasattr(parent, "__pydantic_fields__") else {}
+    parent_column_fields: set[str] = set()
+    for field_name in parent.__pydantic_fields__ if hasattr(parent, "__pydantic_fields__") else ():
+        if field_name in original_hints:
+            parent_annotations[field_name] = original_hints[field_name]
+        if field_name not in parent_relationships and field_name not in parent_non_column:
+            parent_column_fields.add(field_name)
+
+    child_annotations = namespace.get("__annotations__", {})
+
+    # Detect child relationship and non-column fields
+    child_relationship_fields: set[str] = set()
+    child_non_column_fields: set[str] = set()
+    for field_name in child_annotations:
+        default_val = namespace.get(field_name)
+        if _is_relationship(default_val):
+            child_relationship_fields.add(field_name)
+        elif isinstance(default_val, FieldInfo):
+            sa_info = _get_sa_info(default_val)
+            if sa_info is not None and not sa_info.column:
+                child_non_column_fields.add(field_name)
+
+    # --- Merge parent + child annotations ---
+    merged_annotations = {**parent_annotations, **child_annotations}
+    namespace["__annotations__"] = merged_annotations
+
+    # Copy parent defaults for fields not overridden by child
+    for field_name in parent_annotations:
+        if field_name not in namespace and hasattr(parent, "__pydantic_fields__"):
+            pfield = parent.__pydantic_fields__[field_name]
+            if pfield.default is not PydanticUndefined:
+                namespace[field_name] = pfield.default
+            elif pfield.default_factory is not None:
+                namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
+
+    # --- Build child SA Table (child-specific columns + PK/FK only) ---
+    # Resolve type hints for child-only fields
+    temp_for_hints = type.__new__(type, name, (object,), {**namespace, "__annotations__": child_annotations})
+    try:
+        child_resolved = get_type_hints(temp_for_hints)
+    except Exception:
+        child_resolved = dict(child_annotations)
+
+    child_columns: list[Column[Any]] = []
+    # PK/FK column referencing parent PK
+    child_columns.append(
+        Column(pk_name, type(parent_pk_col.type)(), ForeignKey(f"{parent.__tablename__}.{pk_name}"), primary_key=True)
+    )
+    # Child-specific data columns
+    for field_name, type_hint in child_resolved.items():
+        if field_name == pk_name:
+            continue  # PK already added as FK
+        if field_name in child_relationship_fields or field_name in child_non_column_fields:
+            continue
+        default_val = namespace.get(field_name)
+        sa_info = _get_sa_info(default_val) if isinstance(default_val, FieldInfo) else None
+        child_columns.append(_build_sa_column(field_name, type_hint, sa_info))
+
+    # Handle __table_args__
+    extra_args: tuple[Any, ...] = ()
+    table_kwargs: dict[str, Any] = {}
+    if table_args is not None:
+        if isinstance(table_args, dict):
+            table_kwargs = table_args
+        elif isinstance(table_args, tuple):
+            if table_args and isinstance(table_args[-1], dict):
+                extra_args = table_args[:-1]
+                table_kwargs = table_args[-1]
+            else:
+                extra_args = table_args
+
+    child_table = Table(tablename, target_metadata, *child_columns, *extra_args, **table_kwargs)
+
+    # --- Resolve child relationships ---
+    resolved_rels: dict[str, _ResolvedRelationship] = {}
+    if child_relationship_fields:
+        temp_merged = type.__new__(type, name, (object,), {**namespace, "__annotations__": merged_annotations})
+        try:
+            merged_resolved = get_type_hints(temp_merged)
+        except Exception:
+            merged_resolved = dict(merged_annotations)
+        resolved_rels = _resolve_relationships(temp_merged, merged_resolved, namespace)
+
+    # --- Build pydantic dataclass ---
+    clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
+    cls: Any = type.__new__(mcs, name, clean_bases, namespace)
+    dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
+
+    # --- Attach metadata ---
+    dc_cls.__table__ = child_table
+    dc_cls.__tablename__ = tablename
+    dc_cls.__sqldataclass_is_table__ = True
+    dc_cls.__sqldataclass_is_jti_child__ = True
+    dc_cls.__jti_parent__ = parent
+    dc_cls.__jti_parent_table__ = parent.__table__
+    dc_cls.__jti_parent_fields__ = frozenset(parent_column_fields)
+    dc_cls.__relationships__ = resolved_rels
+    dc_cls.__non_column_fields__ = frozenset(child_non_column_fields | parent_non_column)
+    dc_cls.metadata = target_metadata
+    dc_cls.c = _MergedColumns(child_table, parent.__table__)
+
+    # Pre-compute FK map
+    fk_map: dict[str, Column[Any]] = {}
+    for col in child_table.columns:
+        for fk in col.foreign_keys:
+            try:
+                fk_map[fk.column.table.name] = col
+            except Exception:
+                pass
+    dc_cls.__fk_map__ = fk_map
+
+    _attach_convenience_methods(dc_cls)
+    _MODEL_REGISTRY[tablename] = dc_cls
+
+    return dc_cls
+
+
 def _find_metadata(bases: tuple[type, ...]) -> MetaData:
     """Walk bases to find the SQLDataclass.metadata instance."""
     for base in bases:
@@ -1606,6 +1821,105 @@ def _insert_relationships(instance: Any, conn: Connection) -> None:
             object.__setattr__(instance, fk_col.name, pk_value)
 
 
+def _jti_insert(instance: Any, conn: Connection) -> None:
+    """Insert a JTI child: parent table first, then child table."""
+    cls = type(instance)
+    parent_table: Table = cls.__jti_parent_table__
+    child_table: Table = cls.__table__
+    parent_col_names = {c.name for c in parent_table.columns}
+    child_col_names = {c.name for c in child_table.columns}
+    pk_name = list(parent_table.primary_key.columns)[0].name
+
+    # Get all field values (including parent fields)
+    raw = {field_name: getattr(instance, field_name) for field_name in instance.__pydantic_fields__}
+    rel_keys = set(cls.__relationships__)
+    non_col_keys = set(cls.__non_column_fields__)
+
+    # Split into parent and child data
+    excluded = rel_keys | non_col_keys
+    parent_data = {k: v for k, v in raw.items() if k in parent_col_names and k not in excluded}
+    child_data = {k: v for k, v in raw.items() if k in child_col_names and k not in excluded}
+
+    # Strip None PK from parent (let DB auto-generate)
+    if parent_data.get(pk_name) is None:
+        parent_data.pop(pk_name, None)
+
+    # INSERT parent with RETURNING
+    result = conn.execute(parent_table.insert().values(parent_data).returning(parent_table))
+    parent_row = result.mappings().fetchone()
+    if parent_row:
+        for key, value in parent_row.items():
+            if hasattr(instance, key):
+                object.__setattr__(instance, key, value)
+
+    # Set PK on child data (FK to parent)
+    child_data[pk_name] = getattr(instance, pk_name)
+
+    # INSERT child with RETURNING
+    result = conn.execute(child_table.insert().values(child_data).returning(child_table))
+    child_row = result.mappings().fetchone()
+    if child_row:
+        for key, value in child_row.items():
+            if hasattr(instance, key):
+                object.__setattr__(instance, key, value)
+
+
+def _jti_update(klass: Any, values: dict[str, Any], conn: Connection, where: Any) -> int:
+    """Update a JTI child: route fields to parent or child table.
+
+    Uses a PK subquery so WHERE clauses referencing either table work correctly.
+    """
+    parent_table: Table = klass.__jti_parent_table__
+    child_table: Table = klass.__table__
+    parent_col_names = {c.name for c in parent_table.columns}
+    child_col_names = {c.name for c in child_table.columns}
+    pk_name = list(parent_table.primary_key.columns)[0].name
+    parent_pk = parent_table.c[pk_name]
+    child_pk = child_table.c[pk_name]
+
+    parent_values = {k: v for k, v in values.items() if k in parent_col_names}
+    child_values = {k: v for k, v in values.items() if k in child_col_names}
+
+    # Build PK subquery from the joined tables — works regardless of which table WHERE references
+    pk_subquery = sa_select(child_pk).select_from(parent_table.join(child_table, parent_pk == child_pk))
+    if where is not None:
+        pk_subquery = pk_subquery.where(where)
+
+    rowcount = 0
+    if parent_values:
+        stmt = sa_update(parent_table).values(parent_values).where(parent_pk.in_(pk_subquery))
+        rowcount = conn.execute(stmt).rowcount
+
+    if child_values:
+        stmt = sa_update(child_table).values(child_values).where(child_pk.in_(pk_subquery))
+        rowcount = max(rowcount, conn.execute(stmt).rowcount)
+
+    return rowcount
+
+
+def _jti_delete(klass: Any, conn: Connection, where: Any) -> int:
+    """Delete a JTI child: child rows first (FK constraint), then parent rows."""
+    parent_table: Table = klass.__jti_parent_table__
+    child_table: Table = klass.__table__
+    pk_name = list(parent_table.primary_key.columns)[0].name
+    parent_pk = parent_table.c[pk_name]
+    child_pk = child_table.c[pk_name]
+
+    # Find PKs to delete via joined query
+    find_query = sa_select(child_pk).select_from(parent_table.join(child_table, parent_pk == child_pk))
+    if where is not None:
+        find_query = find_query.where(where)
+    pk_values = [row[0] for row in conn.execute(find_query)]
+
+    if not pk_values:
+        return 0
+
+    # Delete child rows first (FK constraint), then parent rows
+    conn.execute(sa_delete(child_table).where(child_pk.in_(pk_values)))
+    result = conn.execute(sa_delete(parent_table).where(parent_pk.in_(pk_values)))
+    return result.rowcount
+
+
 def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches many methods in one pass
     """Attach query/write convenience methods to a table class."""
 
@@ -1637,8 +1951,13 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
                 q = q.offset(offset)
             return q
 
+        is_jti = getattr(klass, "__sqldataclass_is_jti_child__", False)
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
-        if _has_join_relationships(rels):
+
+        if is_jti:
+            query = _apply_pagination(_build_jti_query(klass, where=where, order_by=order_by))
+            results = _load_all(conn, query, klass)
+        elif _has_join_relationships(rels):
             query = _apply_pagination(_build_joined_query(klass, where=where, order_by=order_by))
             results = [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
         elif rels:
@@ -1662,15 +1981,23 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         _populate_scalar_chains(results, conn, _depth=0)
         return results
 
-    def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:
+    def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:  # noqa: PLR0911  # JTI adds one more return path
         """Load a single row, or ``None`` if not found."""
         where = _apply_discriminator_filter(klass, where)
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
                 return _model_load_one(klass, auto_conn, where=where)
 
+        is_jti = getattr(klass, "__sqldataclass_is_jti_child__", False)
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
-        if _has_join_relationships(rels):
+
+        if is_jti:
+            query = _build_jti_query(klass, where=where)
+            flat_row = _fetch_one(conn, query)
+            if flat_row is None:
+                return None
+            result = _fast_construct(klass, flat_row)
+        elif _has_join_relationships(rels):
             query = _build_joined_query(klass, where=where)
             row = conn.execute(query).mappings().one_or_none()
             if row is None:
@@ -1707,6 +2034,10 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
             with _get_engine(klass).begin() as auto_conn:
                 _model_insert_many(klass, auto_conn, objects=objects)
                 return
+        if getattr(klass, "__sqldataclass_is_jti_child__", False):
+            for obj in objects:
+                _model_insert(obj, conn)
+            return
         rows = [_flatten_for_table(obj) for obj in objects]
         _insert_many(conn, klass, rows)
 
@@ -1724,6 +2055,11 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
                 _model_insert(self, auto_conn)
                 return
         _insert_relationships(self, conn)
+
+        if getattr(type(self), "__sqldataclass_is_jti_child__", False):
+            _jti_insert(self, conn)
+            return
+
         flat = _apply_discriminator_on_insert(type(self), _flatten_for_table(self))
         target_table = type(self).__table__
         result = conn.execute(target_table.insert().values(flat).returning(target_table))
@@ -1751,6 +2087,10 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
                 return _model_update(klass, values, auto_conn, where=where)
+
+        if getattr(klass, "__sqldataclass_is_jti_child__", False):
+            return _jti_update(klass, values, conn, where)
+
         stmt = sa_update(klass.__table__).values(values)
         if where is not None:
             stmt = stmt.where(where)
@@ -1763,6 +2103,10 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
                 return _model_delete(klass, auto_conn, where=where)
+
+        if getattr(klass, "__sqldataclass_is_jti_child__", False):
+            return _jti_delete(klass, conn, where)
+
         stmt = sa_delete(klass.__table__)
         if where is not None:
             stmt = stmt.where(where)

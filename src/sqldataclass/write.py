@@ -120,6 +120,12 @@ def flatten_for_table(
     rel_keys: set[str] = set(getattr(type(domain_object), "__relationships__", {}))
     non_column_keys: set[str] = set(getattr(type(domain_object), "__non_column_fields__", ()))
     server_defaults = _server_defaulted_columns(type(domain_object)) if strip_server_defaults else frozenset()
+    # Table columns are always included (even list/dict values for ARRAY/JSON types)
+    table_col_names = (
+        {c.name for c in type(domain_object).__table__.columns}
+        if hasattr(type(domain_object), "__table__")
+        else set[str]()
+    )
 
     return {
         key: value
@@ -127,8 +133,13 @@ def flatten_for_table(
         if key not in exclude_keys
         and key not in rel_keys
         and key not in non_column_keys
-        and not isinstance(value, dict | list)
-        and not dataclasses.is_dataclass(value)
-        and not isinstance(value, pydantic.BaseModel)
+        and not (
+            key not in table_col_names
+            and (
+                isinstance(value, dict | list)
+                or dataclasses.is_dataclass(value)
+                or isinstance(value, pydantic.BaseModel)
+            )
+        )
         and not (value is None and key in server_defaults)
     }

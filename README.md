@@ -589,6 +589,44 @@ class Document(SQLDataclass, table=True):
     content: dict[str, object] = Field(default_factory=dict, sa_type=JSONB)
 ```
 
+## Joined-table inheritance
+
+Define a parent model and a child model that inherits from it — each gets its own table, and the child automatically inherits the parent's fields:
+
+```python
+class Person(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    email: str
+
+class Employee(Person, table=True):
+    __tablename__ = "employees"
+    department: str
+    salary: float = 0.0
+```
+
+- `Person.__table__` has columns: `id`, `name`, `email`
+- `Employee.__table__` has columns: `id` (FK to person), `department`, `salary`
+- `Employee` at the Python level has all fields: `id`, `name`, `email`, `department`, `salary`
+
+Loading auto-JOINs the parent table:
+
+```python
+employees = Employee.load_all(conn, where=Employee.c.name == "Alice")
+```
+
+Inserting cascades to the parent first, then the child:
+
+```python
+employee = Employee(name="Alice", email="alice@co.com", department="Eng", salary=120_000)
+employee.insert(conn)
+# Inserts into person table first (gets auto-generated id), then employees table
+```
+
+The child's `.c` column accessor resolves both parent and child columns, so WHERE/ORDER BY clauses work on either.
+
+**Limitations (v1):** single-level inheritance only (no grandchild chains), single-column primary key on the parent.
+
 ## Custom type annotations
 
 SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:
