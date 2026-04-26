@@ -577,7 +577,7 @@ class Config(SQLDataclass, table=True):
     metadata_: dict[str, object] | None = None                      # → JSON, nullable
 ```
 
-For PostgreSQL's binary `JSONB` (recommended for indexing and query performance), use `sa_type`:
+**Prefer `JSON` over `JSONB`:** `JSONB` stores a binary representation that is harder to inspect, tends to accumulate stale/garbage data that is difficult to clean up, and encourages putting unstructured blobs into relational tables. If you need indexing or query operators on JSON fields, PostgreSQL's `JSONB` is available via `sa_type`, but consider whether a proper relational schema is the better fit:
 
 ```python
 from sqlalchemy.dialects.postgresql import JSONB
