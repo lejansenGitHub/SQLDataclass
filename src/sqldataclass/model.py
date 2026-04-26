@@ -1937,6 +1937,58 @@ def _jti_insert_many(klass: Any, objects: Sequence[Any], conn: Connection) -> No
                     object.__setattr__(obj, key, value)
 
 
+def _jti_insert_many(klass: Any, objects: Sequence[Any], conn: Connection) -> None:
+    """Bulk-insert JTI children: one bulk INSERT for parents, one for children.
+
+    Uses ``INSERT ... RETURNING`` on the parent table to retrieve generated
+    PKs, then bulk-inserts child rows with those PKs as foreign keys.
+    """
+    parent_table: Table = klass.__jti_parent_table__
+    child_table: Table = klass.__table__
+    parent_col_names = {c.name for c in parent_table.columns}
+    child_col_names = {c.name for c in child_table.columns}
+    pk_name = list(parent_table.primary_key.columns)[0].name
+
+    rel_keys = set(klass.__relationships__)
+    non_col_keys = set(klass.__non_column_fields__)
+    excluded = rel_keys | non_col_keys
+    parent_server_defaults = _server_default_columns(parent_table)
+    child_server_defaults = _server_default_columns(child_table)
+
+    # Build parent rows
+    parent_rows: list[dict[str, Any]] = []
+    for obj in objects:
+        raw = {field_name: getattr(obj, field_name) for field_name in obj.__pydantic_fields__}
+        parent_data = {
+            k: v
+            for k, v in raw.items()
+            if k in parent_col_names and k not in excluded and not (v is None and k in parent_server_defaults)
+        }
+        parent_rows.append(parent_data)
+
+    # Bulk INSERT parents with RETURNING to get generated PKs
+    result = conn.execute(parent_table.insert().returning(parent_table), parent_rows)
+    for obj, returned_row in zip(objects, result.mappings(), strict=True):
+        for key, value in returned_row.items():
+            if hasattr(obj, key):
+                object.__setattr__(obj, key, value)
+
+    # Build child rows (PKs are now set on instances)
+    child_rows: list[dict[str, Any]] = []
+    for obj in objects:
+        raw = {field_name: getattr(obj, field_name) for field_name in obj.__pydantic_fields__}
+        child_data = {
+            k: v
+            for k, v in raw.items()
+            if k in child_col_names and k not in excluded and not (v is None and k in child_server_defaults)
+        }
+        child_data[pk_name] = getattr(obj, pk_name)
+        child_rows.append(child_data)
+
+    # Bulk INSERT children
+    conn.execute(child_table.insert(), child_rows)
+
+
 def _jti_update(klass: Any, values: dict[str, Any], conn: Connection, where: Any) -> int:
     """Update a JTI child: route fields to the correct table in the ancestor chain."""
     child_table: Table = klass.__table__
@@ -2108,8 +2160,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
                 _model_insert_many(klass, auto_conn, objects=objects)
                 return
         if getattr(klass, "__sqldataclass_is_jti_child__", False):
-            for obj in objects:
-                _model_insert(obj, conn)
+            _jti_insert_many(klass, objects, conn)
             return
         rows = [_flatten_for_table(obj) for obj in objects]
         _insert_many(conn, klass, rows)

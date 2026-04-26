@@ -177,25 +177,28 @@ def test_jti_load_not_dramatically_slower_than_flat() -> None:
 
 
 @pytest.mark.performance
-def test_jti_individual_insert_overhead() -> None:
-    """JTI individual insert (2 tables) should be no more than 4x slower than single-table individual insert."""
-    insert_count = 500
+def test_jti_insert_many_bulk_not_dramatically_slower_than_flat() -> None:
+    """JTI bulk insert_many (2 bulk INSERTs) should be no more than 5x slower than flat bulk insert_many."""
+    insert_count = 1000
     jti_engine = _create_engine_with_tables(_EmployeePerf)
     flat_engine = _create_engine_with_tables(_FlatEmployeePerf)
 
+    jti_objects = [
+        _EmployeePerf(name=f"p_{i}", email=f"p{i}@co.com", age=30, department="eng", salary=100.0, level=1)
+        for i in range(insert_count)
+    ]
+    flat_objects = [
+        _FlatEmployeePerf(name=f"p_{i}", email=f"p{i}@co.com", age=30, department="eng", salary=100.0, level=1)
+        for i in range(insert_count)
+    ]
+
     def _insert_jti() -> None:
         with jti_engine.begin() as conn:
-            for i in range(insert_count):
-                _EmployeePerf(
-                    name=f"p_{i}", email=f"p{i}@co.com", age=30, department="eng", salary=100.0, level=1
-                ).insert(conn)
+            _EmployeePerf.insert_many(conn, objects=jti_objects)
 
     def _insert_flat() -> None:
         with flat_engine.begin() as conn:
-            for i in range(insert_count):
-                _FlatEmployeePerf(
-                    name=f"p_{i}", email=f"p{i}@co.com", age=30, department="eng", salary=100.0, level=1
-                ).insert(conn)
+            _FlatEmployeePerf.insert_many(conn, objects=flat_objects)
 
     elapsed_jti = _time_it(_insert_jti)
     elapsed_flat = _time_it(_insert_flat)
@@ -203,10 +206,10 @@ def test_jti_individual_insert_overhead() -> None:
     ratio = elapsed_jti / elapsed_flat
 
     # --- Assert ---
-    # JTI does 2 INSERTs per row (parent + child), so ~2x is expected.
-    # Allow up to 4x for overhead (field splitting, etc.).
-    assert ratio < 4.0, (
-        f"JTI individual insert is too slow compared to flat: {ratio:.2f}x "
+    # JTI does 2 bulk INSERTs (parent RETURNING + child) vs 1 flat bulk INSERT.
+    # Allow up to 5x for the RETURNING overhead and field splitting.
+    assert ratio < 5.0, (
+        f"JTI bulk insert_many is too slow compared to flat: {ratio:.2f}x "
         f"(jti={elapsed_jti:.4f}s, flat={elapsed_flat:.4f}s)"
     )
 
