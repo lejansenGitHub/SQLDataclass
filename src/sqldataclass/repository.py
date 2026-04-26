@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.engine import Connection, RowMapping
 
+if TYPE_CHECKING:
+    import psycopg
 
-def _ensure_sa_connection(connection: Any) -> Connection:
+
+def _ensure_sa_connection(connection: Connection | psycopg.Cursor[Any] | psycopg.Connection[Any]) -> Connection:
     """Return an SA Connection, wrapping psycopg objects if necessary."""
     if isinstance(connection, Connection):
         return connection
@@ -35,7 +38,7 @@ class ReadRepository:
         repo = MyReadRepo(psycopg_connection)
     """
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection | psycopg.Cursor[Any] | psycopg.Connection[Any]) -> None:
         self._connection = _ensure_sa_connection(connection)
 
     def _fetch_one(self, query: str, params: dict[str, Any] | None = None) -> RowMapping | None:
@@ -81,7 +84,7 @@ class TransactionHandle:
         handle = TransactionHandle(psycopg_cursor)
     """
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection | psycopg.Cursor[Any] | psycopg.Connection[Any]) -> None:
         self._connection = _ensure_sa_connection(connection)
 
     @contextmanager

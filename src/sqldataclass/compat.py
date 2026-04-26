@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, overload
+
 from sqlalchemy import create_engine
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection as SAConnection
 from sqlalchemy.pool import StaticPool
 
+if TYPE_CHECKING:
+    import psycopg
 
-def from_psycopg(psycopg_conn_or_cursor: object) -> Connection:
+
+@overload
+def from_psycopg(psycopg_conn_or_cursor: psycopg.Cursor[Any]) -> SAConnection: ...
+
+
+@overload
+def from_psycopg(psycopg_conn_or_cursor: psycopg.Connection[Any]) -> SAConnection: ...
+
+
+def from_psycopg(psycopg_conn_or_cursor: psycopg.Cursor[Any] | psycopg.Connection[Any]) -> SAConnection:
     """Wrap a psycopg3 connection or cursor into an SQLAlchemy Connection.
 
     The returned SA Connection shares the same underlying psycopg connection
@@ -35,18 +48,20 @@ def from_psycopg(psycopg_conn_or_cursor: object) -> Connection:
     return engine.connect()
 
 
-def _extract_connection(psycopg_conn_or_cursor: object) -> object:
+def _extract_connection(
+    psycopg_conn_or_cursor: psycopg.Cursor[Any] | psycopg.Connection[Any],
+) -> psycopg.Connection[Any]:
     """Extract the psycopg connection from a cursor, or return as-is if already a connection."""
     try:
-        import psycopg
+        import psycopg as _psycopg
     except ImportError as exc:
         msg = "psycopg is required for from_psycopg(). Install with: pip install sqldataclass[postgres]"
         raise ImportError(msg) from exc
 
-    if isinstance(psycopg_conn_or_cursor, psycopg.Cursor):
+    if isinstance(psycopg_conn_or_cursor, _psycopg.Cursor):
         return psycopg_conn_or_cursor.connection
 
-    if isinstance(psycopg_conn_or_cursor, psycopg.Connection):
+    if isinstance(psycopg_conn_or_cursor, _psycopg.Connection):
         return psycopg_conn_or_cursor
 
     msg = f"Expected a psycopg Connection or Cursor, got {type(psycopg_conn_or_cursor).__name__}"
