@@ -542,6 +542,30 @@ class Config(SQLDataclass, table=True):
     value: str = ""
 ```
 
+## Array columns
+
+`list[T]` fields are automatically mapped to PostgreSQL `ARRAY` columns:
+
+```python
+class Transformer(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    tap_steps: list[float] = Field(default_factory=list)    # → ARRAY(Float)
+    labels: list[str] | None = None                          # → ARRAY(String), nullable
+    readings: list[int] = Field(default_factory=list)        # → ARRAY(Integer)
+```
+
+Supported element types: `float`, `int`, `str`, `bool`, `bytes`, `datetime`, `date`, `time`, `Decimal`, `UUID`.
+
+For unsupported element types or multidimensional arrays, use `sa_type` explicitly:
+
+```python
+from sqlalchemy import ARRAY, Float
+
+class Matrix(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    grid: list[list[float]] = Field(default_factory=list, sa_type=ARRAY(Float, dimensions=2))
+```
+
 ## Custom type annotations
 
 SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:

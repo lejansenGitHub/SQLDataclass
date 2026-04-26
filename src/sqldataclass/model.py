@@ -63,6 +63,7 @@ from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.fields import FieldInfo
 from pydantic_core import PydanticUndefined
 from sqlalchemy import (
+    ARRAY,
     Boolean,
     Column,
     Date,
@@ -159,8 +160,12 @@ def _unwrap_union_variants(tp: Any) -> list[Any]:
     return [tp]
 
 
-def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
-    """Map a Python type to a SQLAlchemy column type."""
+def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]] | TypeEngine[Any]:
+    """Map a Python type to a SQLAlchemy column type.
+
+    Returns a type class for scalar types (e.g. ``Integer``) or an instance
+    for parameterised types like ``ARRAY(Float)``.
+    """
     inner, _ = _unwrap_optional(tp)
 
     # Literal["foo", "bar"] → String
@@ -174,6 +179,18 @@ def _python_type_to_sa(tp: Any) -> type[TypeEngine[Any]]:
     # NewType("Kilometers", float) → unwrap to float
     while hasattr(inner, "__supertype__"):
         inner = inner.__supertype__
+
+    # list[T] → ARRAY(sa_type_for_T)
+    if get_origin(inner) is list:
+        args = get_args(inner)
+        if args:
+            element_sa_type = _TYPE_MAP.get(args[0])
+            if element_sa_type is not None:
+                return ARRAY(element_sa_type)
+        raise TypeError(
+            f"Cannot map Python type {tp!r} to a SQLAlchemy ARRAY type. "
+            f"Use Field(sa_type=ARRAY(...)) to specify the element type explicitly."
+        )
 
     sa_type = _TYPE_MAP.get(inner)
     if sa_type is None:
