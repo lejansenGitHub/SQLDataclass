@@ -1160,6 +1160,12 @@ class SQLDataclassMeta(type):
         if table:
             jti_parent = _find_table_parent(bases)
             if jti_parent is not None:
+                if getattr(jti_parent, "__sqldataclass_is_jti_child__", False):
+                    msg = (
+                        f"{name} cannot use multi-level joined-table inheritance. "
+                        f"Parent {jti_parent.__name__} is already a JTI child."
+                    )
+                    raise TypeError(msg)
                 qualname = f"{namespace.get('__module__', '')}.{name}"
                 _BUILDING.add(qualname)
                 try:
@@ -1526,12 +1532,18 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
                 namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
 
     # --- Build child SA Table (child-specific columns + PK/FK only) ---
-    # Resolve type hints for child-only fields
-    temp_for_hints = type.__new__(type, name, (object,), {**namespace, "__annotations__": child_annotations})
+    # Resolve type hints for column-only fields (skip relationships and non-column to
+    # avoid forward-reference errors from unresolved relationship types like list[Report])
+    column_annotations = {
+        k: v
+        for k, v in child_annotations.items()
+        if k not in child_relationship_fields and k not in child_non_column_fields
+    }
+    temp_for_hints = type.__new__(type, name, (object,), {**namespace, "__annotations__": column_annotations})
     try:
         child_resolved = get_type_hints(temp_for_hints)
     except Exception:
-        child_resolved = dict(child_annotations)
+        child_resolved = dict(column_annotations)
 
     child_columns: list[Column[Any]] = []
     # PK/FK column referencing parent PK
@@ -1542,8 +1554,6 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
     for field_name, type_hint in child_resolved.items():
         if field_name == pk_name:
             continue  # PK already added as FK
-        if field_name in child_relationship_fields or field_name in child_non_column_fields:
-            continue
         default_val = namespace.get(field_name)
         sa_info = _get_sa_info(default_val) if isinstance(default_val, FieldInfo) else None
         child_columns.append(_build_sa_column(field_name, type_hint, sa_info))
