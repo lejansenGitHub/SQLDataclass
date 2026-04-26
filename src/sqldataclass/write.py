@@ -120,8 +120,9 @@ def flatten_for_table(
     rel_keys: set[str] = set(getattr(type(domain_object), "__relationships__", {}))
     non_column_keys: set[str] = set(getattr(type(domain_object), "__non_column_fields__", ()))
     server_defaults = _server_defaulted_columns(type(domain_object)) if strip_server_defaults else frozenset()
-    # Table columns are always included (even list/dict values for ARRAY/JSON types)
-    table_col_names = (
+    # Table columns are always included (even list/dict values for ARRAY/JSON types).
+    # Use cached __table_col_names__ if available to avoid rebuilding the set per call.
+    table_col_names: set[str] = getattr(type(domain_object), "__table_col_names__", None) or (
         {c.name for c in type(domain_object).__table__.columns}
         if hasattr(type(domain_object), "__table__")
         else set[str]()
