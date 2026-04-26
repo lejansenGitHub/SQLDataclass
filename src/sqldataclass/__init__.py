@@ -1,8 +1,9 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 
 from sqldataclass.basemodel import SQLModel
+from sqldataclass.compat import from_psycopg
 from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.hydration import (
     discriminator_map,
@@ -17,6 +18,7 @@ from sqldataclass.registry import (
     drop_all_tables,
     table,
 )
+from sqldataclass.repository import ReadRepository, TransactionHandle, WriteRepository
 from sqldataclass.return_types import (
     DictReturn,
     DictReturnMany,
@@ -43,9 +45,12 @@ __all__ = [
     "ModelReturn",
     "ModelReturnMany",
     "NonNullDictReturn",
+    "ReadRepository",
     "Relationship",
     "SQLDataclass",
     "SQLModel",
+    "TransactionHandle",
+    "WriteRepository",
     "create_all_tables",
     "discriminator_map",
     "drop_all_tables",
@@ -53,6 +58,7 @@ __all__ = [
     "fetch_one",
     "flatten_for_table",
     "format_discriminated",
+    "from_psycopg",
     "insert_many",
     "insert_row",
     "load_all",
