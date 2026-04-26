@@ -371,25 +371,25 @@ For polymorphic data stored in separate tables:
 ```python
 from typing import Literal
 
-class NormalData(SQLDataclass, table=True):
-    id: int = Field(primary_key=True, foreign_key="participant.id")
-    behavior: Literal["normal"] = "normal"
-    p_max: float = 0.0
+class CreditCardPayment(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="order.id")
+    method: Literal["credit_card"] = "credit_card"
+    card_last_four: str = ""
 
-class BatteryData(SQLDataclass, table=True):
-    id: int = Field(primary_key=True, foreign_key="participant.id")
-    behavior: Literal["battery"] = "battery"
-    capacity: float = 0.0
+class BankTransferPayment(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="order.id")
+    method: Literal["bank_transfer"] = "bank_transfer"
+    iban: str = ""
 
-class Participant(SQLDataclass, table=True):
+class Order(SQLDataclass, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    name: str
-    behavior: str  # discriminator column
-    data: NormalData | BatteryData = Relationship(discriminator="behavior")
+    customer: str
+    method: str  # discriminator column
+    payment: CreditCardPayment | BankTransferPayment = Relationship(discriminator="method")
 
-p = Participant.load_one(where=Participant.c.name == "Alice")
-print(type(p.data).__name__)  # "NormalData"
-print(p.data.p_max)           # 100.0
+order = Order.load_one(where=Order.c.customer == "Alice")
+print(type(order.payment).__name__)  # "CreditCardPayment"
+print(order.payment.card_last_four)  # "4242"
 ```
 
 ### Single-table inheritance
