@@ -143,8 +143,8 @@ def test_jti_child_with_column_false_field(engine_and_connection: tuple[object, 
 # ---------------------------------------------------------------------------
 
 
-def test_multi_level_jti_raises_type_error() -> None:
-    """Creating a grandchild JTI class raises TypeError."""
+def test_multi_level_jti_supported() -> None:
+    """Multi-level JTI (grandchild) creates correct class with all ancestor fields."""
 
     class Animal(SQLDataclass, table=True):
         __tablename__ = "jti_animals_multilevel"
@@ -155,12 +155,12 @@ def test_multi_level_jti_raises_type_error() -> None:
         __tablename__ = "jti_dogs_multilevel"
         breed: str = ""
 
-    # --- Assert ---
-    with pytest.raises(TypeError, match="multi-level joined-table inheritance"):
+    class Puppy(Dog, table=True):
+        __tablename__ = "jti_puppies_multilevel"
+        age_weeks: int = 0
 
-        class Puppy(Dog, table=True):
-            __tablename__ = "jti_puppies_multilevel"
-            age_weeks: int = 0
+    # --- Assert ---
+    assert set(Puppy.__pydantic_fields__) == {"id", "species", "breed", "age_weeks"}
 
 
 # ---------------------------------------------------------------------------
