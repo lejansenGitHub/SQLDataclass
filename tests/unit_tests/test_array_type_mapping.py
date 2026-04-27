@@ -135,3 +135,20 @@ def test_flatten_for_table_preserves_list_values() -> None:
 
     # --- Assert ---
     assert flat["readings"] == [1.0, 2.5, 3.7]
+
+
+def test_bare_list_raises_type_error() -> None:
+    """Bare list without type args raises TypeError."""
+    with pytest.raises(TypeError, match="Cannot map Python type"):
+        _python_type_to_sa(list)
+
+
+def test_list_bool_maps_to_array_boolean() -> None:
+    """list[bool] maps to ARRAY(Boolean)."""
+    from sqlalchemy import Boolean
+
+    result = _python_type_to_sa(list[bool])
+
+    # --- Assert ---
+    assert isinstance(result, ARRAY)
+    assert isinstance(result.item_type, Boolean)

@@ -1315,6 +1315,7 @@ def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inhe
     dc_cls.__relationships__ = getattr(parent, "__relationships__", {})
     dc_cls.metadata = getattr(parent, "metadata", MetaData())
     dc_cls.c = parent.__table__.c
+    dc_cls.__table_col_names__ = getattr(parent, "__table_col_names__", frozenset[str]())
 
     # Register subtype for polymorphic loading
     parent_key = parent.__tablename__
@@ -1525,12 +1526,18 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
                 namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
 
     # --- Build child SA Table (child-specific columns + PK/FK only) ---
-    # Resolve type hints for child-only fields
-    temp_for_hints = type.__new__(type, name, (object,), {**namespace, "__annotations__": child_annotations})
+    # Resolve type hints for column-only fields (skip relationships and non-column to
+    # avoid forward-reference errors from unresolved relationship types like list[Report])
+    column_annotations = {
+        k: v
+        for k, v in child_annotations.items()
+        if k not in child_relationship_fields and k not in child_non_column_fields
+    }
+    temp_for_hints = type.__new__(type, name, (object,), {**namespace, "__annotations__": column_annotations})
     try:
         child_resolved = get_type_hints(temp_for_hints)
     except Exception:
-        child_resolved = dict(child_annotations)
+        child_resolved = dict(column_annotations)
 
     child_columns: list[Column[Any]] = []
     # PK/FK column referencing parent PK
@@ -1541,8 +1548,6 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
     for field_name, type_hint in child_resolved.items():
         if field_name == pk_name:
             continue  # PK already added as FK
-        if field_name in child_relationship_fields or field_name in child_non_column_fields:
-            continue
         default_val = namespace.get(field_name)
         sa_info = _get_sa_info(default_val) if isinstance(default_val, FieldInfo) else None
         child_columns.append(_build_sa_column(field_name, type_hint, sa_info))
@@ -1600,6 +1605,7 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
             except Exception:
                 pass
     dc_cls.__fk_map__ = fk_map
+    dc_cls.__table_col_names__ = frozenset(c.name for c in child_table.columns)
 
     _attach_convenience_methods(dc_cls)
     _MODEL_REGISTRY[tablename] = dc_cls
@@ -1709,6 +1715,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
                 except Exception:
                     pass  # target table not yet created, will use slow path
         dc_cls.__fk_map__ = fk_map
+        dc_cls.__table_col_names__ = frozenset(c.name for c in sa_table.columns)
         _attach_convenience_methods(dc_cls)
         # Register for forward reference resolution
         _MODEL_REGISTRY[tablename] = dc_cls
@@ -1841,6 +1848,15 @@ def _insert_relationships(instance: Any, conn: Connection) -> None:
             object.__setattr__(instance, fk_col.name, pk_value)
 
 
+def _server_default_columns(sa_table: Table) -> frozenset[str]:
+    """Return column names with server defaults or autoincrement — None values should be omitted from INSERT."""
+    return frozenset(
+        col.name
+        for col in sa_table.columns
+        if col.server_default is not None or (col.primary_key and col.autoincrement is not False)
+    )
+
+
 def _jti_insert(instance: Any, conn: Connection) -> None:
     """Insert a JTI child through its full ancestor chain (root first, leaf last)."""
     cls = type(instance)
@@ -1856,7 +1872,12 @@ def _jti_insert(instance: Any, conn: Connection) -> None:
     # INSERT each table in order: root → ... → leaf
     for table in all_tables:
         table_col_names = {c.name for c in table.columns}
-        table_data = {k: v for k, v in raw.items() if k in table_col_names and k not in excluded}
+        server_defaults = _server_default_columns(table)
+        table_data = {
+            k: v
+            for k, v in raw.items()
+            if k in table_col_names and k not in excluded and not (v is None and k in server_defaults)
+        }
 
         # Strip None PK on root (let DB generate), set PK on descendants
         if table is ancestor_tables[0]:
@@ -2081,8 +2102,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
                 _model_insert_many(klass, auto_conn, objects=objects)
                 return
         if getattr(klass, "__sqldataclass_is_jti_child__", False):
-            for obj in objects:
-                _model_insert(obj, conn)
+            _jti_insert_many(klass, objects, conn)
             return
         rows = [_flatten_for_table(obj) for obj in objects]
         _insert_many(conn, klass, rows)
@@ -2120,6 +2140,9 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
 
         Uses RETURNING to populate DB-generated fields on the instance in place.
         """
+        if getattr(type(self), "__sqldataclass_is_jti_child__", False):
+            msg = "upsert() is not supported on joined-table inheritance children. Use insert() or update() instead."
+            raise NotImplementedError(msg)
         if conn is None:
             with _get_engine(type(self)).begin() as auto_conn:
                 _model_upsert(self, auto_conn, index_elements=index_elements)

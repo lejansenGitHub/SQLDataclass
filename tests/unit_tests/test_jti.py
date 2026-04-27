@@ -691,3 +691,73 @@ def test_multi_level_jti_insert_many(engine_and_connection: tuple[object, Connec
     assert results[0].team_size == 5
     assert results[2].name == "Charlie"
     assert results[2].department == "Ops"
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_upsert_raises_not_implemented() -> None:
+    """upsert() on a JTI child raises NotImplementedError."""
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_upsert"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_upsert"
+        department: str = ""
+
+    employee = Employee(name="Alice", department="Eng")
+
+    # --- Assert ---
+    with pytest.raises(NotImplementedError, match="upsert.*not supported.*joined-table"):
+        employee.upsert(None, index_elements=["id"])  # type: ignore[arg-type]  # passing None to test error before connection is used
+
+
+def test_load_all_with_pagination(engine_and_connection: tuple[object, Connection]) -> None:
+    """Pagination (limit/offset) works on JTI load_all."""
+    engine, connection = engine_and_connection
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_page"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_page"
+        department: str = ""
+
+    _create_tables(engine, Employee)
+
+    for name in ["Alice", "Bob", "Charlie", "Diana"]:
+        Employee(name=name, department="Eng").insert(connection)
+    connection.commit()
+
+    page = Employee.load_all(connection, order_by=Employee.c.name, limit=2, offset=1)
+
+    # --- Assert ---
+    assert len(page) == 2
+    assert page[0].name == "Bob"
+    assert page[1].name == "Charlie"
+
+
+def test_load_all_empty_result(engine_and_connection: tuple[object, Connection]) -> None:
+    """load_all returns empty list when no rows match."""
+    engine, connection = engine_and_connection
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_empty"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_empty"
+        department: str = ""
+
+    _create_tables(engine, Employee)
+
+    # --- Assert ---
+    assert Employee.load_all(connection) == []
