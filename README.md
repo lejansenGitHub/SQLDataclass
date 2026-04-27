@@ -371,25 +371,25 @@ For polymorphic data stored in separate tables:
 ```python
 from typing import Literal
 
-class NormalData(SQLDataclass, table=True):
-    id: int = Field(primary_key=True, foreign_key="participant.id")
-    behavior: Literal["normal"] = "normal"
-    p_max: float = 0.0
+class CreditCardPayment(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="order.id")
+    method: Literal["credit_card"] = "credit_card"
+    card_last_four: str = ""
 
-class BatteryData(SQLDataclass, table=True):
-    id: int = Field(primary_key=True, foreign_key="participant.id")
-    behavior: Literal["battery"] = "battery"
-    capacity: float = 0.0
+class BankTransferPayment(SQLDataclass, table=True):
+    id: int = Field(primary_key=True, foreign_key="order.id")
+    method: Literal["bank_transfer"] = "bank_transfer"
+    iban: str = ""
 
-class Participant(SQLDataclass, table=True):
+class Order(SQLDataclass, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    name: str
-    behavior: str  # discriminator column
-    data: NormalData | BatteryData = Relationship(discriminator="behavior")
+    customer: str
+    method: str  # discriminator column
+    payment: CreditCardPayment | BankTransferPayment = Relationship(discriminator="method")
 
-p = Participant.load_one(where=Participant.c.name == "Alice")
-print(type(p.data).__name__)  # "NormalData"
-print(p.data.p_max)           # 100.0
+order = Order.load_one(where=Order.c.customer == "Alice")
+print(type(order.payment).__name__)  # "CreditCardPayment"
+print(order.payment.card_last_four)  # "4242"
 ```
 
 ### Single-table inheritance
@@ -604,6 +604,125 @@ For advanced use cases, the underlying bridge functions are also available:
 | `flatten_for_table(obj, exclude_keys=)` | Flatten dataclass to dict |
 | `nest_fields(data, field_name, keys)` | Reshape flat dict for nested models |
 | `format_discriminated(data, cls, ...)` | Reshape flat row for discriminated unions |
+
+## Repository pattern
+
+SQLDataclass includes base repository classes for structuring database access in applications. Repositories receive a connection and provide helper methods for raw SQL queries.
+
+### Base classes
+
+```python
+from sqldataclass import ReadRepository, WriteRepository, TransactionHandle
+
+class UserReadRepo(ReadRepository):
+    def get_by_id(self, user_id: int) -> dict | None:
+        row = self._fetch_one(
+            "SELECT * FROM users WHERE id = %(user_id)s",
+            {"user_id": user_id},
+        )
+        return dict(row) if row else None
+
+    def list_all(self) -> list[dict]:
+        return [dict(r) for r in self._fetch_all("SELECT * FROM users")]
+
+class UserWriteRepo(WriteRepository):
+    def create(self, name: str) -> None:
+        self._execute(
+            "INSERT INTO users (name) VALUES (%(name)s)",
+            {"name": name},
+        )
+```
+
+`ReadRepository` provides:
+- `_fetch_one(query, params)` — single row or `None`
+- `_fetch_all(query, params)` — list of rows
+- `_fetch_value(query, params)` — single scalar value
+
+`WriteRepository` adds:
+- `_execute(query, params)` — run INSERT/UPDATE/DELETE
+- `commit()` — commit the transaction
+
+`TransactionHandle` provides savepoint support:
+
+```python
+handle = TransactionHandle(connection)
+with handle.savepoint():
+    # rolls back only this block on error, outer transaction stays valid
+    write_repo.create("Alice")
+handle.commit()
+```
+
+### Usage with FastAPI
+
+```python
+from fastapi import Depends, FastAPI
+from sqlalchemy.engine import Connection
+
+app = FastAPI()
+
+@app.get("/users/{user_id}")
+def get_user(
+    user_id: int,
+    repo: UserReadRepo = Depends(get_user_read_repo),
+):
+    return repo.get_by_id(user_id)
+```
+
+## psycopg compatibility
+
+If your codebase uses raw psycopg3 cursors, `from_psycopg()` wraps them into an SQLAlchemy Connection that works with SQLDataclass — sharing the same underlying transaction:
+
+```python
+from sqldataclass import from_psycopg
+
+sa_conn = from_psycopg(cur)            # from a psycopg cursor
+sa_conn = from_psycopg(psycopg_conn)   # from a psycopg connection
+
+heroes = Hero.load_all(sa_conn, where=Hero.c.age > 30)
+```
+
+Repositories also accept psycopg cursors directly:
+
+```python
+repo = UserReadRepo(cur)  # auto-wrapped via from_psycopg
+```
+
+This enables incremental migration — legacy cursor-based code and new SQLDataclass repos can coexist in the same transaction:
+
+```python
+# Endpoint creates one psycopg cursor, shares it across old and new code
+sa_conn = from_psycopg(cur)
+repo = UserReadRepo(sa_conn)
+user = repo.get_by_id(42)        # new: via repository
+cur.execute("SELECT ...")         # old: raw cursor — same transaction
+```
+
+### Test fixture pattern
+
+For tests that use a shared cursor with rollback cleanup:
+
+```python
+import pytest
+from sqldataclass import from_psycopg
+
+@pytest.fixture
+def cur(db_interface):
+    cur = db_interface.cur
+    try:
+        yield cur
+    finally:
+        db_interface.conn.rollback()  # cleans up all changes
+
+@pytest.fixture
+def sa_conn(cur):
+    return from_psycopg(cur)
+
+@pytest.fixture
+def user_repo(sa_conn):
+    return UserReadRepo(sa_conn)
+```
+
+All fixtures share the same psycopg connection — same transaction — rollback cleans everything.
 
 ## Design philosophy
 
