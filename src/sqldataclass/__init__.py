@@ -1,6 +1,6 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 
 from sqldataclass.basemodel import SQLModel
 from sqldataclass.compat import from_psycopg

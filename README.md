@@ -629,6 +629,36 @@ Multi-level inheritance works too — `Manager(Employee(Person))` chains JOINs t
 
 **Limitation:** single-column primary key on the root ancestor.
 
+## PostGIS geometry columns
+
+For spatial data, use [GeoAlchemy2](https://geoalchemy-2.readthedocs.io/) with `sa_type`:
+
+```python
+from geoalchemy2 import Geometry
+
+class Site(SQLDataclass, table=True):
+    __tablename__ = "sites"
+    __table_args__ = {"schema": "assets"}
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    geocoord: bytes = Field(default=b"", sa_type=Geometry("Point", srid=4326))
+    route: bytes = Field(default=b"", sa_type=Geometry("LineString", srid=4326))
+```
+
+Add GIST indexes for spatial queries via `__table_args__`:
+
+```python
+from sqlalchemy import Index
+
+class Site(SQLDataclass, table=True):
+    __table_args__ = (
+        Index("ix_sites_geocoord", "geocoord", postgresql_using="gist"),
+    )
+    ...
+```
+
+Install GeoAlchemy2 separately: `pip install geoalchemy2`. It is not bundled with SQLDataclass.
+
 ## Custom type annotations
 
 SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:
