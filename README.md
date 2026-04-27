@@ -577,7 +577,9 @@ class Config(SQLDataclass, table=True):
     metadata_: dict[str, object] | None = None                      # → JSON, nullable
 ```
 
-**Prefer `JSON` over `JSONB`:** `JSONB` stores a binary representation that is harder to inspect, tends to accumulate stale/garbage data that is difficult to clean up, and encourages putting unstructured blobs into relational tables. If you need indexing or query operators on JSON fields, PostgreSQL's `JSONB` is available via `sa_type`, but consider whether a proper relational schema is the better fit:
+**Prefer relational columns over JSON.** JSON columns tend to accumulate unstructured garbage that is hard to query, validate, and clean up. If the data has a known shape, model it with proper columns or use a discriminated union (see above). Reserve `dict` fields for truly dynamic data like user preferences or external API payloads where the schema is not under your control.
+
+For PostgreSQL's `JSONB` (binary, indexable), use `sa_type`:
 
 ```python
 from sqlalchemy.dialects.postgresql import JSONB
