@@ -566,6 +566,29 @@ class Matrix(SQLDataclass, table=True):
     grid: list[list[float]] = Field(default_factory=list, sa_type=ARRAY(Float, dimensions=2))
 ```
 
+## JSON columns
+
+`dict` fields are automatically mapped to SQL `JSON` columns:
+
+```python
+class Config(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    settings: dict[str, object] = Field(default_factory=dict)      # → JSON, NOT NULL
+    metadata_: dict[str, object] | None = None                      # → JSON, nullable
+```
+
+**Prefer relational columns over JSON.** JSON columns tend to accumulate unstructured garbage that is hard to query, validate, and clean up. If the data has a known shape, model it with proper columns or use a discriminated union (see above). Reserve `dict` fields for truly dynamic data like user preferences or external API payloads where the schema is not under your control.
+
+For PostgreSQL's `JSONB` (binary, indexable), use `sa_type`:
+
+```python
+from sqlalchemy.dialects.postgresql import JSONB
+
+class Document(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    content: dict[str, object] = Field(default_factory=dict, sa_type=JSONB)
+```
+
 ## Custom type annotations
 
 SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:
