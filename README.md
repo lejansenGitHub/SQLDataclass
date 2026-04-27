@@ -513,6 +513,35 @@ class User(SQLDataclass, table=True):
 | `order_by` | `str` | Column name to sort collection children by |
 | `default` | `Any` | Default value (`None` for many-to-one, `[]` for collections) |
 
+## Table arguments
+
+Use `__table_args__` to pass constraints, indexes, and table-level options to SQLAlchemy:
+
+```python
+from sqlalchemy import CheckConstraint, Index, UniqueConstraint
+
+class Order(SQLDataclass, table=True):
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_orders_email"),
+        CheckConstraint("total >= 0", name="ck_orders_total_positive"),
+        Index("ix_orders_created", "created_at"),
+        {"schema": "sales"},  # optional trailing dict for table kwargs
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    email: str
+    total: float = 0.0
+    created_at: str = ""
+```
+
+Follows the [SQLAlchemy convention](https://docs.sqlalchemy.org/en/20/orm/declarative_tables.html#orm-declarative-table-configuration): a tuple of constraints/indexes, optionally ending with a dict of keyword arguments. A plain dict is also accepted:
+
+```python
+class Config(SQLDataclass, table=True):
+    __table_args__ = {"schema": "settings"}
+    key: str = Field(primary_key=True)
+    value: str = ""
+```
+
 ## Custom type annotations
 
 SQLDataclass doesn't bundle domain-specific type annotations (e.g. numpy), but you can define your own in your project and use them seamlessly with pydantic's `Annotated` types:
