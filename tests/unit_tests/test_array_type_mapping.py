@@ -119,3 +119,19 @@ def test_explicit_sa_type_overrides_auto_mapping() -> None:
     # --- Assert ---
     assert isinstance(column.type, ARRAY)
     assert column.type.dimensions == 2
+
+
+def test_flatten_for_table_preserves_list_values() -> None:
+    """flatten_for_table must not drop list values that are ARRAY columns (regression)."""
+    from sqldataclass.write import flatten_for_table
+
+    class Sample(SQLDataclass, table=True):
+        __tablename__ = "samples_flatten_test"
+        id: int = Field(primary_key=True)
+        readings: list[float] = Field(default_factory=list)
+
+    instance = Sample(id=1, readings=[1.0, 2.5, 3.7])
+    flat = flatten_for_table(instance)
+
+    # --- Assert ---
+    assert flat["readings"] == [1.0, 2.5, 3.7]

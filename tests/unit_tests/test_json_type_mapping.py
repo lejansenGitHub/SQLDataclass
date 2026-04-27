@@ -107,3 +107,29 @@ def test_json_roundtrip_with_sqlite() -> None:
     # --- Assert ---
     assert row is not None
     assert row[1] == {"theme": "dark", "font_size": 14}
+
+
+def test_json_model_insert_roundtrip() -> None:
+    """Model.insert() correctly persists JSON dict values (regression: flatten_for_table must not drop dicts)."""
+    from sqlalchemy import MetaData, create_engine
+
+    class Setting(SQLDataclass, table=True):
+        __tablename__ = "settings_insert_roundtrip_test"
+        id: int = Field(primary_key=True)
+        config: dict[str, object] = Field(default_factory=dict)
+
+    engine = create_engine("sqlite:///:memory:")
+    metadata = MetaData()
+    Setting.__table__.to_metadata(metadata)
+    metadata.create_all(engine)
+
+    with engine.begin() as connection:
+        obj = Setting(id=1, config={"retries": 3, "timeout": 30})
+        obj.insert(connection)
+
+    with engine.connect() as connection:
+        loaded = Setting.load_one(connection, where=Setting.c.id == 1)
+
+    # --- Assert ---
+    assert loaded is not None
+    assert loaded.config == {"retries": 3, "timeout": 30}
