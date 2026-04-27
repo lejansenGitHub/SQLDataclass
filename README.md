@@ -625,7 +625,9 @@ employee.insert(conn)
 
 The child's `.c` column accessor resolves both parent and child columns, so WHERE/ORDER BY clauses work on either.
 
-**Limitations (v1):** single-level inheritance only (no grandchild chains), single-column primary key on the parent.
+Multi-level inheritance works too — `Manager(Employee(Person))` chains JOINs through all ancestor tables automatically.
+
+**Limitation:** single-column primary key on the root ancestor.
 
 ## Custom type annotations
 

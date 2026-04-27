@@ -27,11 +27,12 @@ def _create_tables(engine: object, *models: type) -> None:
     """Create tables for the given models in a fresh MetaData."""
     metadata = MetaData()
     for model in models:
+        # Copy all ancestor tables for multi-level JTI children
+        ancestor_tables = getattr(model, "__jti_ancestor_tables__", ())
+        for ancestor in ancestor_tables:
+            if ancestor.name not in metadata.tables:
+                ancestor.to_metadata(metadata)
         model.__table__.to_metadata(metadata)  # type: ignore[union-attr]  # __table__ is set dynamically by metaclass
-        # Also copy parent table for JTI children
-        parent_table = getattr(model, "__jti_parent_table__", None)
-        if parent_table is not None and parent_table.name not in metadata.tables:
-            parent_table.to_metadata(metadata)
     metadata.create_all(engine)
 
 
@@ -562,3 +563,131 @@ def test_composite_pk_parent_raises_type_error() -> None:
         class Child(CompositePK, table=True):
             __tablename__ = "jti_composite_pk_child"
             value: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Multi-level JTI (3 levels)
+# ---------------------------------------------------------------------------
+
+
+def test_multi_level_jti_class_structure() -> None:
+    """Three-level JTI: grandchild has all ancestor fields, each table has only own columns."""
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_ml"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_ml"
+        department: str = ""
+
+    class Manager(Employee, table=True):
+        __tablename__ = "jti_managers_ml"
+        team_size: int = 0
+
+    # --- Assert ---
+    assert set(Manager.__pydantic_fields__) == {"id", "name", "department", "team_size"}
+    assert {c.name for c in Person.__table__.columns} == {"id", "name"}
+    assert {c.name for c in Employee.__table__.columns} == {"id", "department"}
+    assert {c.name for c in Manager.__table__.columns} == {"id", "team_size"}
+    assert str(Manager.c.name) == "jti_persons_ml.name"
+    assert str(Manager.c.department) == "jti_employees_ml.department"
+    assert str(Manager.c.team_size) == "jti_managers_ml.team_size"
+
+
+def test_multi_level_jti_full_roundtrip(engine_and_connection: tuple[object, Connection]) -> None:
+    """Three-level JTI: insert, load, update, delete all work across 3 tables."""
+    engine, connection = engine_and_connection
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_ml_rt"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_ml_rt"
+        department: str = ""
+
+    class Manager(Employee, table=True):
+        __tablename__ = "jti_managers_ml_rt"
+        team_size: int = 0
+
+    _create_tables(engine, Manager)
+
+    # Insert
+    mgr = Manager(name="Alice", department="Eng", team_size=5)
+    mgr.insert(connection)
+    connection.commit()
+
+    # --- Assert ---
+    assert mgr.id is not None
+    assert mgr.id == 1
+
+    # Load
+    loaded = Manager.load_one(connection, where=Manager.c.name == "Alice")
+
+    # --- Assert ---
+    assert loaded is not None
+    assert loaded.name == "Alice"
+    assert loaded.department == "Eng"
+    assert loaded.team_size == 5
+
+    # Update root field
+    Manager.update({"name": "Alicia"}, connection, where=Manager.c.team_size == 5)
+    connection.commit()
+    loaded = Manager.load_one(connection)
+
+    # --- Assert ---
+    assert loaded is not None
+    assert loaded.name == "Alicia"
+
+    # Delete
+    Manager(name="Bob", department="Sales", team_size=3).insert(connection)
+    connection.commit()
+    deleted = Manager.delete(connection, where=Manager.c.name == "Alicia")
+    connection.commit()
+
+    remaining = Manager.load_all(connection)
+
+    # --- Assert ---
+    assert deleted == 1
+    assert len(remaining) == 1
+    assert remaining[0].name == "Bob"
+
+
+def test_multi_level_jti_insert_many(engine_and_connection: tuple[object, Connection]) -> None:
+    """Three-level JTI insert_many works with bulk inserts."""
+    engine, connection = engine_and_connection
+
+    class Person(SQLDataclass, table=True):
+        __tablename__ = "jti_persons_ml_many"
+        id: int | None = Field(default=None, primary_key=True)
+        name: str = ""
+
+    class Employee(Person, table=True):
+        __tablename__ = "jti_employees_ml_many"
+        department: str = ""
+
+    class Manager(Employee, table=True):
+        __tablename__ = "jti_managers_ml_many"
+        team_size: int = 0
+
+    _create_tables(engine, Manager)
+
+    managers = [
+        Manager(name="Alice", department="Eng", team_size=5),
+        Manager(name="Bob", department="Sales", team_size=3),
+        Manager(name="Charlie", department="Ops", team_size=8),
+    ]
+    Manager.insert_many(connection, objects=managers)
+    connection.commit()
+
+    results = Manager.load_all(connection, order_by=Manager.c.name)
+
+    # --- Assert ---
+    assert len(results) == 3
+    assert results[0].name == "Alice"
+    assert results[0].team_size == 5
+    assert results[2].name == "Charlie"
+    assert results[2].department == "Ops"

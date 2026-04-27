@@ -649,23 +649,30 @@ def _has_join_relationships(relationships: dict[str, _ResolvedRelationship]) -> 
 
 
 def _build_jti_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
-    """Build a SELECT that JOINs a JTI child table with its parent table.
+    """Build a SELECT that JOINs a JTI child through its full ancestor chain.
 
-    Returns a flat result set with all parent + child columns (excluding the
-    duplicate child PK since it equals the parent PK).
+    Returns a flat result set with all ancestor + child columns (excluding
+    duplicate PK columns since they all equal the root PK).
     """
     child_table: Table = cls.__table__
-    parent_table: Table = cls.__jti_parent_table__
-    parent_pk = list(parent_table.primary_key.columns)[0]
-    child_pk = list(child_table.primary_key.columns)[0]
+    ancestor_tables: tuple[Table, ...] = cls.__jti_ancestor_tables__
 
-    # SELECT all parent columns + child columns (skip child PK to avoid duplicate)
-    columns = list(parent_table.columns)
+    # Columns: root table first, then each intermediate's non-PK, then leaf's non-PK
+    root = ancestor_tables[0]
+    columns = list(root.columns)
+    for ancestor in ancestor_tables[1:]:
+        columns.extend(col for col in ancestor.columns if not col.primary_key)
     columns.extend(col for col in child_table.columns if not col.primary_key)
 
-    joined = parent_table.join(child_table, parent_pk == child_pk)
-    query = sa_select(*columns).select_from(joined)
+    # Chain JOINs: root → ancestor1 → ancestor2 → ... → child
+    all_tables = (*ancestor_tables, child_table)
+    joined: Any = all_tables[0]
+    for i in range(1, len(all_tables)):
+        prev_pk = list(all_tables[i - 1].primary_key.columns)[0]
+        curr_pk = list(all_tables[i].primary_key.columns)[0]
+        joined = joined.join(all_tables[i], prev_pk == curr_pk)
 
+    query = sa_select(*columns).select_from(joined)
     if where is not None:
         query = query.where(where)
     if order_by is not None:
@@ -1410,28 +1417,32 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
 
 
 class _MergedColumns:
-    """Column accessor that checks the child table first, then the parent table.
+    """Column accessor that checks the child table first, then ancestor tables.
 
-    Allows ``Employee.c.name`` to resolve a column defined on the parent table.
+    Allows ``Manager.c.name`` to resolve a column defined on any ancestor table.
     """
 
-    __slots__ = ("_child", "_parent")
+    __slots__ = ("_tables",)
 
-    def __init__(self, child_table: Table, parent_table: Table) -> None:
-        object.__setattr__(self, "_child", child_table.c)
-        object.__setattr__(self, "_parent", parent_table.c)
+    def __init__(self, child_table: Table, ancestor_tables: tuple[Table, ...]) -> None:
+        # Order: child first, then ancestors from most-specific to root
+        object.__setattr__(self, "_tables", (child_table.c, *(t.c for t in reversed(ancestor_tables))))
 
     def __getattr__(self, name: str) -> Column[Any]:
-        try:
-            return getattr(object.__getattribute__(self, "_child"), name)  # type: ignore[no-any-return]  # SA column accessor returns Column
-        except AttributeError:
-            return getattr(object.__getattribute__(self, "_parent"), name)  # type: ignore[no-any-return]  # SA column accessor returns Column
+        for table_c in object.__getattribute__(self, "_tables"):
+            try:
+                return getattr(table_c, name)  # type: ignore[no-any-return]  # SA column accessor returns Column
+            except AttributeError:
+                continue
+        raise AttributeError(name)
 
     def __getitem__(self, name: str) -> Column[Any]:
-        try:
-            return object.__getattribute__(self, "_child")[name]  # type: ignore[no-any-return]  # SA column accessor returns Column
-        except KeyError:
-            return object.__getattribute__(self, "_parent")[name]  # type: ignore[no-any-return]  # SA column accessor returns Column
+        for table_c in object.__getattribute__(self, "_tables"):
+            try:
+                return table_c[name]  # type: ignore[no-any-return]  # SA column accessor returns Column
+            except KeyError:
+                continue
+        raise KeyError(name)
 
 
 def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setup is inherently complex
@@ -1454,18 +1465,26 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
     table_args = namespace.pop("__table_args__", None)
     target_metadata = _find_metadata(bases)
 
-    # --- Validate parent PK (single-column only for v1) ---
-    parent_pk_cols = list(parent.__table__.primary_key.columns)
-    if len(parent_pk_cols) != 1:
+    # --- Build ancestor chain (multi-level JTI) ---
+    # If parent is itself a JTI child, extend its ancestor chain; otherwise start a new one.
+    if getattr(parent, "__sqldataclass_is_jti_child__", False):
+        ancestor_tables: tuple[Table, ...] = parent.__jti_ancestor_tables__ + (parent.__table__,)
+    else:
+        ancestor_tables = (parent.__table__,)
+    root_table = ancestor_tables[0]
+
+    # --- Validate root PK (single-column only) ---
+    root_pk_cols = list(root_table.primary_key.columns)
+    if len(root_pk_cols) != 1:
         msg = (
-            f"Joined-table inheritance requires a single-column primary key on parent "
-            f"{parent.__name__}, got {len(parent_pk_cols)}"
+            f"Joined-table inheritance requires a single-column primary key on root "
+            f"{root_table.name}, got {len(root_pk_cols)}"
         )
         raise TypeError(msg)
-    parent_pk_col = parent_pk_cols[0]
-    pk_name: str = parent_pk_col.name
+    pk_name: str = root_pk_cols[0].name
+    parent_pk_col = list(parent.__table__.primary_key.columns)[0]
 
-    # --- Identify parent and child field sets ---
+    # --- Identify parent and child field sets (all ancestors) ---
     parent_relationships: set[str] = set(getattr(parent, "__relationships__", {}))
     parent_non_column: set[str] = set(getattr(parent, "__non_column_fields__", ()))
 
@@ -1565,11 +1584,12 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
     dc_cls.__sqldataclass_is_jti_child__ = True
     dc_cls.__jti_parent__ = parent
     dc_cls.__jti_parent_table__ = parent.__table__
+    dc_cls.__jti_ancestor_tables__ = ancestor_tables
     dc_cls.__jti_parent_fields__ = frozenset(parent_column_fields)
     dc_cls.__relationships__ = resolved_rels
     dc_cls.__non_column_fields__ = frozenset(child_non_column_fields | parent_non_column)
     dc_cls.metadata = target_metadata
-    dc_cls.c = _MergedColumns(child_table, parent.__table__)
+    dc_cls.c = _MergedColumns(child_table, ancestor_tables)
 
     # Pre-compute FK map
     fk_map: dict[str, Column[Any]] = {}
@@ -1822,91 +1842,117 @@ def _insert_relationships(instance: Any, conn: Connection) -> None:
 
 
 def _jti_insert(instance: Any, conn: Connection) -> None:
-    """Insert a JTI child: parent table first, then child table."""
+    """Insert a JTI child through its full ancestor chain (root first, leaf last)."""
     cls = type(instance)
-    parent_table: Table = cls.__jti_parent_table__
     child_table: Table = cls.__table__
-    parent_col_names = {c.name for c in parent_table.columns}
-    child_col_names = {c.name for c in child_table.columns}
-    pk_name = list(parent_table.primary_key.columns)[0].name
+    ancestor_tables: tuple[Table, ...] = cls.__jti_ancestor_tables__
+    all_tables = (*ancestor_tables, child_table)
+    pk_name: str = list(ancestor_tables[0].primary_key.columns)[0].name
 
-    # Get all field values (including parent fields)
+    # Get all field values
     raw = {field_name: getattr(instance, field_name) for field_name in instance.__pydantic_fields__}
-    rel_keys = set(cls.__relationships__)
-    non_col_keys = set(cls.__non_column_fields__)
+    excluded = set(cls.__relationships__) | set(cls.__non_column_fields__)
 
-    # Split into parent and child data
-    excluded = rel_keys | non_col_keys
-    parent_data = {k: v for k, v in raw.items() if k in parent_col_names and k not in excluded}
-    child_data = {k: v for k, v in raw.items() if k in child_col_names and k not in excluded}
+    # INSERT each table in order: root → ... → leaf
+    for table in all_tables:
+        table_col_names = {c.name for c in table.columns}
+        table_data = {k: v for k, v in raw.items() if k in table_col_names and k not in excluded}
 
-    # Strip None PK from parent (let DB auto-generate)
-    if parent_data.get(pk_name) is None:
-        parent_data.pop(pk_name, None)
+        # Strip None PK on root (let DB generate), set PK on descendants
+        if table is ancestor_tables[0]:
+            if table_data.get(pk_name) is None:
+                table_data.pop(pk_name, None)
+        else:
+            table_data[pk_name] = getattr(instance, pk_name)
 
-    # INSERT parent with RETURNING
-    result = conn.execute(parent_table.insert().values(parent_data).returning(parent_table))
-    parent_row = result.mappings().fetchone()
-    if parent_row:
-        for key, value in parent_row.items():
-            if hasattr(instance, key):
-                object.__setattr__(instance, key, value)
+        result = conn.execute(table.insert().values(table_data).returning(table))
+        row = result.mappings().fetchone()
+        if row:
+            for key, value in row.items():
+                if hasattr(instance, key):
+                    object.__setattr__(instance, key, value)
 
-    # Set PK on child data (FK to parent)
-    child_data[pk_name] = getattr(instance, pk_name)
 
-    # INSERT child with RETURNING
-    result = conn.execute(child_table.insert().values(child_data).returning(child_table))
-    child_row = result.mappings().fetchone()
-    if child_row:
-        for key, value in child_row.items():
-            if hasattr(instance, key):
-                object.__setattr__(instance, key, value)
+def _jti_insert_many(klass: Any, objects: Sequence[Any], conn: Connection) -> None:
+    """Bulk-insert JTI children: one bulk INSERT per table in the ancestor chain.
+
+    Uses ``INSERT ... RETURNING`` on each table to propagate generated PKs
+    to the next level.
+    """
+    child_table: Table = klass.__table__
+    ancestor_tables: tuple[Table, ...] = klass.__jti_ancestor_tables__
+    all_tables = (*ancestor_tables, child_table)
+    pk_name: str = list(ancestor_tables[0].primary_key.columns)[0].name
+    excluded = set(klass.__relationships__) | set(klass.__non_column_fields__)
+    pydantic_fields = klass.__pydantic_fields__
+
+    # Build raw dicts once
+    raw_list = [{field_name: getattr(obj, field_name) for field_name in pydantic_fields} for obj in objects]
+
+    # Bulk INSERT each table in order: root → ... → leaf
+    for idx, table in enumerate(all_tables):
+        table_col_names = {c.name for c in table.columns}
+
+        rows: list[dict[str, Any]] = []
+        for obj, raw in zip(objects, raw_list, strict=True):
+            row_data = {k: v for k, v in raw.items() if k in table_col_names and k not in excluded}
+            if idx == 0:
+                row_data.pop(pk_name, None) if row_data.get(pk_name) is None else None
+            else:
+                row_data[pk_name] = getattr(obj, pk_name)
+            rows.append(row_data)
+
+        # All levels use RETURNING to propagate PKs and server defaults
+        result = conn.execute(table.insert().returning(table), rows)
+        for obj, returned_row in zip(objects, result.mappings(), strict=True):
+            for key, value in returned_row.items():
+                if hasattr(obj, key):
+                    object.__setattr__(obj, key, value)
 
 
 def _jti_update(klass: Any, values: dict[str, Any], conn: Connection, where: Any) -> int:
-    """Update a JTI child: route fields to parent or child table.
-
-    Uses a PK subquery so WHERE clauses referencing either table work correctly.
-    """
-    parent_table: Table = klass.__jti_parent_table__
+    """Update a JTI child: route fields to the correct table in the ancestor chain."""
     child_table: Table = klass.__table__
-    parent_col_names = {c.name for c in parent_table.columns}
-    child_col_names = {c.name for c in child_table.columns}
-    pk_name = list(parent_table.primary_key.columns)[0].name
-    parent_pk = parent_table.c[pk_name]
-    child_pk = child_table.c[pk_name]
+    ancestor_tables: tuple[Table, ...] = klass.__jti_ancestor_tables__
+    all_tables = (*ancestor_tables, child_table)
+    pk_name: str = list(ancestor_tables[0].primary_key.columns)[0].name
 
-    parent_values = {k: v for k, v in values.items() if k in parent_col_names}
-    child_values = {k: v for k, v in values.items() if k in child_col_names}
-
-    # Build PK subquery from the joined tables — works regardless of which table WHERE references
-    pk_subquery = sa_select(child_pk).select_from(parent_table.join(child_table, parent_pk == child_pk))
+    # Build PK subquery joining all tables
+    joined: Any = all_tables[0]
+    for i in range(1, len(all_tables)):
+        prev_pk = list(all_tables[i - 1].primary_key.columns)[0]
+        curr_pk = list(all_tables[i].primary_key.columns)[0]
+        joined = joined.join(all_tables[i], prev_pk == curr_pk)
+    pk_subquery = sa_select(all_tables[0].c[pk_name]).select_from(joined)
     if where is not None:
         pk_subquery = pk_subquery.where(where)
 
+    # Route values to the correct table and update
     rowcount = 0
-    if parent_values:
-        stmt = sa_update(parent_table).values(parent_values).where(parent_pk.in_(pk_subquery))
-        rowcount = conn.execute(stmt).rowcount
-
-    if child_values:
-        stmt = sa_update(child_table).values(child_values).where(child_pk.in_(pk_subquery))
-        rowcount = max(rowcount, conn.execute(stmt).rowcount)
+    for table in all_tables:
+        table_col_names = {c.name for c in table.columns}
+        table_values = {k: v for k, v in values.items() if k in table_col_names}
+        if table_values:
+            stmt = sa_update(table).values(table_values).where(table.c[pk_name].in_(pk_subquery))
+            rowcount = max(rowcount, conn.execute(stmt).rowcount)
 
     return rowcount
 
 
 def _jti_delete(klass: Any, conn: Connection, where: Any) -> int:
-    """Delete a JTI child: child rows first (FK constraint), then parent rows."""
-    parent_table: Table = klass.__jti_parent_table__
+    """Delete a JTI child: leaf first, root last (FK constraint order)."""
     child_table: Table = klass.__table__
-    pk_name = list(parent_table.primary_key.columns)[0].name
-    parent_pk = parent_table.c[pk_name]
-    child_pk = child_table.c[pk_name]
+    ancestor_tables: tuple[Table, ...] = klass.__jti_ancestor_tables__
+    all_tables = (*ancestor_tables, child_table)
+    pk_name: str = list(ancestor_tables[0].primary_key.columns)[0].name
 
-    # Find PKs to delete via joined query
-    find_query = sa_select(child_pk).select_from(parent_table.join(child_table, parent_pk == child_pk))
+    # Build joined query to find matching PKs
+    joined: Any = all_tables[0]
+    for i in range(1, len(all_tables)):
+        prev_pk = list(all_tables[i - 1].primary_key.columns)[0]
+        curr_pk = list(all_tables[i].primary_key.columns)[0]
+        joined = joined.join(all_tables[i], prev_pk == curr_pk)
+    find_query = sa_select(all_tables[0].c[pk_name]).select_from(joined)
     if where is not None:
         find_query = find_query.where(where)
     pk_values = [row[0] for row in conn.execute(find_query)]
@@ -1914,10 +1960,10 @@ def _jti_delete(klass: Any, conn: Connection, where: Any) -> int:
     if not pk_values:
         return 0
 
-    # Delete child rows first (FK constraint), then parent rows
-    conn.execute(sa_delete(child_table).where(child_pk.in_(pk_values)))
-    result = conn.execute(sa_delete(parent_table).where(parent_pk.in_(pk_values)))
-    return result.rowcount
+    # Delete in reverse order: leaf → ... → root (respects FK constraints)
+    for table in reversed(all_tables):
+        conn.execute(sa_delete(table).where(table.c[pk_name].in_(pk_values)))
+    return len(pk_values)
 
 
 def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches many methods in one pass
