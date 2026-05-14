@@ -513,7 +513,7 @@ class User(SQLDataclass, table=True):
 | Parameter | Type | Description |
 |---|---|---|
 | `primary_key` | `bool` | Mark as primary key |
-| `index` | `bool` | Create database index |
+| `index` | `bool \| str` | Create index. `True` or `"btree"` for default btree; or a Postgres method: `"hash"`, `"gin"`, `"gist"`, `"brin"`, `"spgist"` |
 | `unique` | `bool` | Add unique constraint |
 | `foreign_key` | `str` | Foreign key reference (e.g. `"users.id"`) |
 | `nullable` | `bool` | Override nullable inference |
@@ -584,6 +584,32 @@ class Config(SQLDataclass, table=True):
     __table_args__ = {"schema": "settings"}
     key: str = Field(primary_key=True)
     value: str = ""
+```
+
+## Non-btree indexes
+
+`Field(index=...)` accepts a Postgres index method as a string, so you don't have to drop down to `__table_args__` for common cases:
+
+```python
+class Session(SQLDataclass, table=True):
+    __tablename__ = "sessions"
+    id: int | None = Field(default=None, primary_key=True)
+    token: str = Field(index="hash")     # O(1) equality-only lookup
+    user_id: int = Field(foreign_key="users.id")
+```
+
+Supported values: `True` / `"btree"` (default btree), `"hash"`, `"gin"`, `"gist"`, `"brin"`, `"spgist"`. Each non-btree method produces a single `Index(..., postgresql_using=<method>)` named `ix_<tablename>_<column>`. SQLite ignores the method at DDL time — the index is created but as a default btree.
+
+For anything more complex (multi-column, partial, expression, `WHERE`, `INCLUDE`), declare the index in `__table_args__` instead:
+
+```python
+from sqlalchemy import Index
+
+class Document(SQLDataclass, table=True):
+    __table_args__ = (
+        Index("ix_documents_body_fts", "body", postgresql_using="gin"),
+    )
+    ...
 ```
 
 ## Array columns

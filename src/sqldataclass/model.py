@@ -71,6 +71,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
@@ -222,7 +223,7 @@ class SAColumnInfo:
 
     primary_key: bool = False
     nullable: bool | None = None
-    index: bool = False
+    index: bool | str = False
     column: bool = True
     unique: bool = False
     foreign_key: str | None = None
@@ -289,7 +290,7 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
     # SA column params
     primary_key: bool = False,
     nullable: bool | None = None,
-    index: bool = False,
+    index: bool | str = False,
     unique: bool = False,
     foreign_key: str | None = None,
     sa_type: Any = None,
@@ -313,6 +314,12 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
 
     Accepts all pydantic ``Field()`` parameters plus SA column parameters
     (``primary_key``, ``index``, ``unique``, ``foreign_key``, ``sa_type``).
+
+    ``index`` accepts ``True`` / ``False`` (default btree) or a Postgres index
+    method string: ``"hash"``, ``"gin"``, ``"gist"``, ``"brin"``, ``"spgist"``.
+    ``"btree"`` is also accepted as an explicit alias for ``True``. Non-btree
+    methods produce an explicit ``Index(..., postgresql_using=<method>)``
+    attached to the table.
     """
     sa_info = SAColumnInfo(
         primary_key=primary_key,
@@ -430,8 +437,16 @@ def _build_sa_column(
     field_name: str,
     type_hint: Any,
     sa_info: SAColumnInfo | None,
-) -> Column[Any]:
-    """Build one SQLAlchemy ``Column`` from a field's type hint and SA metadata."""
+) -> tuple[Column[Any], str | None]:
+    """Build one SQLAlchemy ``Column`` from a field's type hint and SA metadata.
+
+    Returns ``(column, index_method)``. ``index_method`` is ``None`` for the
+    default btree case (handled by the column-level ``index`` kwarg) and a
+    Postgres index method string (``"hash"``, ``"gin"``, ``"gist"``, ``"brin"``,
+    ``"spgist"``) when a non-btree index is requested. Callers must materialize
+    a non-btree index by appending ``Index(name, column, postgresql_using=index_method)``
+    to the owning ``Table``.
+    """
     inner_type, is_optional = _unwrap_optional(type_hint)
 
     if sa_info is None:
@@ -448,6 +463,16 @@ def _build_sa_column(
     else:
         nullable = is_optional
 
+    # Resolve index method: bool / "btree" → column-level shorthand (default btree).
+    # Any other string → caller emits an explicit Index(..., postgresql_using=method).
+    raw_index = sa_info.index
+    if isinstance(raw_index, str) and raw_index != "btree":
+        column_index: bool = False
+        index_method: str | None = raw_index
+    else:
+        column_index = bool(raw_index)
+        index_method = None
+
     # Positional args
     col_args: list[Any] = [field_name, col_type]
     if sa_info.foreign_key:
@@ -457,7 +482,7 @@ def _build_sa_column(
     col_kwargs: dict[str, Any] = {
         "primary_key": sa_info.primary_key,
         "nullable": nullable,
-        "index": sa_info.index,
+        "index": column_index,
         "unique": sa_info.unique,
     }
     if sa_info.server_default is not None:
@@ -465,7 +490,7 @@ def _build_sa_column(
     if sa_info.sa_column_kwargs:
         col_kwargs.update(sa_info.sa_column_kwargs)
 
-    return Column(*col_args, **col_kwargs)
+    return Column(*col_args, **col_kwargs), index_method
 
 
 def _inject_implicit_fk_fields(
@@ -537,6 +562,7 @@ def _build_table(  # noqa: PLR0913  # internal builder, clarity over arg count
     ending with a dict of keyword arguments, or a plain dict of keyword arguments.
     """
     columns: list[Column[Any]] = []
+    extra_indexes: list[Index] = []
     for field_name, type_hint in resolved_hints.items():
         if field_name in relationship_fields:
             continue
@@ -546,7 +572,10 @@ def _build_table(  # noqa: PLR0913  # internal builder, clarity over arg count
             sa_info = _get_sa_info(default_val)
         if sa_info is not None and not sa_info.column:
             continue
-        columns.append(_build_sa_column(field_name, type_hint, sa_info))
+        column, index_method = _build_sa_column(field_name, type_hint, sa_info)
+        columns.append(column)
+        if index_method is not None:
+            extra_indexes.append(Index(f"ix_{tablename}_{field_name}", column, postgresql_using=index_method))
 
     extra_args: tuple[Any, ...] = ()
     table_kwargs: dict[str, Any] = {}
@@ -560,7 +589,7 @@ def _build_table(  # noqa: PLR0913  # internal builder, clarity over arg count
             else:
                 extra_args = table_args
 
-    return Table(tablename, target_metadata, *columns, *extra_args, **table_kwargs)
+    return Table(tablename, target_metadata, *columns, *extra_indexes, *extra_args, **table_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -1269,7 +1298,7 @@ def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inhe
         if _is_relationship(namespace.get(field_name)):
             continue  # not a column
         try:
-            col = _build_sa_column(field_name, type_hint, None)
+            col, _index_method = _build_sa_column(field_name, type_hint, None)
             # Force nullable since not all subtypes have this column
             col.nullable = True
             parent_table.append_column(col)
@@ -1540,6 +1569,7 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
         child_resolved = dict(column_annotations)
 
     child_columns: list[Column[Any]] = []
+    child_indexes: list[Index] = []
     # PK/FK column referencing parent PK
     child_columns.append(
         Column(pk_name, type(parent_pk_col.type)(), ForeignKey(f"{parent.__tablename__}.{pk_name}"), primary_key=True)
@@ -1550,7 +1580,10 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
             continue  # PK already added as FK
         default_val = namespace.get(field_name)
         sa_info = _get_sa_info(default_val) if isinstance(default_val, FieldInfo) else None
-        child_columns.append(_build_sa_column(field_name, type_hint, sa_info))
+        column, index_method = _build_sa_column(field_name, type_hint, sa_info)
+        child_columns.append(column)
+        if index_method is not None:
+            child_indexes.append(Index(f"ix_{tablename}_{field_name}", column, postgresql_using=index_method))
 
     # Handle __table_args__
     extra_args: tuple[Any, ...] = ()
@@ -1565,7 +1598,7 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
             else:
                 extra_args = table_args
 
-    child_table = Table(tablename, target_metadata, *child_columns, *extra_args, **table_kwargs)
+    child_table = Table(tablename, target_metadata, *child_columns, *child_indexes, *extra_args, **table_kwargs)
 
     # --- Resolve child relationships ---
     resolved_rels: dict[str, _ResolvedRelationship] = {}
