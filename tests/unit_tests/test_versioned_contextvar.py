@@ -143,6 +143,53 @@ def test_two_classes_with_distinct_contextvars_dont_interfere() -> None:
     assert b.value == 5  # AmpB's contextvar was not set, no migration
 
 
+def test_subclass_can_override_parent_contextvar() -> None:
+    """A subclass declaring its own __migration_contextvar__ uses that one
+    instead of the parent's, even if both are versioned. The metaclass runs
+    once per class, so each gets its own bound validator."""
+    parent_cv: ContextVar[bool] = ContextVar("subclass_parent_cv", default=False)
+    child_cv: ContextVar[bool] = ContextVar("subclass_child_cv", default=False)
+
+    class Parent(SQLDataclass, versioned=True):
+        __migration_contextvar__ = parent_cv
+        PARENT_VERSION: int = Field(default=1)
+        name: str
+
+        @classmethod
+        def migrate(cls, obj: dict[str, Any]) -> dict[str, Any]:
+            obj["name"] = "PARENT-migrated"
+            return obj
+
+    class Child(Parent, versioned=True):
+        __migration_contextvar__ = child_cv
+        CHILD_VERSION: int = Field(default=1)
+
+        @classmethod
+        def migrate(cls, obj: dict[str, Any]) -> dict[str, Any]:
+            obj["name"] = "CHILD-migrated"
+            return obj
+
+    # Set only child_cv — Child.migrate runs.
+    token = child_cv.set(True)
+    try:
+        c = Child(name="orig")
+    finally:
+        child_cv.reset(token)
+
+    # Set only parent_cv — Child must NOT be migrated (it listens to child_cv).
+    token = parent_cv.set(True)
+    try:
+        c2 = Child(name="other")
+    finally:
+        parent_cv.reset(token)
+
+    # --- Assert ---
+    assert Parent.__migration_contextvar__ is parent_cv
+    assert Child.__migration_contextvar__ is child_cv
+    assert c.name == "CHILD-migrated"
+    assert c2.name == "other"  # parent_cv set, but Child ignores it
+
+
 def test_non_contextvar_override_is_rejected() -> None:
     """Setting __migration_contextvar__ to something that isn't a ContextVar
     raises a clear TypeError at class construction."""

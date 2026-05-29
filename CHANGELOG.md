@@ -2,6 +2,26 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.3.1] - 2026-05-29
+
+### Fixed
+
+- **Polymorphic `Model.update({"<relationship>": ...})` produces a clear
+  error** instead of an opaque `CompileError`. Routing a relationship through
+  UPDATE has no safe semantic across many rows; SD now raises `ValueError`
+  with guidance to update the FK column(s) + discriminator directly.
+- **Polymorphic FK with two entries pointing at the same target class**
+  (e.g. `{"primary": ("primary_id", Tag), "backup": ("backup_id", Tag)}`)
+  now joins correctly. The join uses a per-entry SA alias so the SELECT no
+  longer fails with "ambiguous column" at compile time. Label prefixes
+  switched from target-table to local-FK column to disambiguate same-target
+  hydration.
+
+### Tested
+
+- Verified subclasses overriding `__migration_contextvar__` correctly use the
+  child's contextvar; added regression test pinning the behavior.
+
 ## [0.3.0] - 2026-05-29
 
 ### Added — polymorphic FK across N columns (#5)

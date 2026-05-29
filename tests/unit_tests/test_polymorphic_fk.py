@@ -288,3 +288,104 @@ def test_insert_without_variant_succeeds(bound_engine: Any) -> None:
     assert items[0].a_id is None
     assert items[0].b_id is None
     assert items[0].variant is None
+
+
+def test_update_rejects_relationship_key_with_clear_error(bound_engine: Any) -> None:
+    """Model.update({"variant": ...}) raises ValueError instead of producing an
+    opaque CompileError. Routing a relationship through UPDATE doesn't have a
+    safe semantic — the caller must update the FK columns + discriminator
+    directly, OR fetch and re-insert."""
+    a = CatalogA(label_a="orig")
+    a.insert()
+    Item(id=1, category="A", a_id=a.id).insert()
+
+    new_a = CatalogA(label_a="new")
+    new_a.insert()
+
+    # --- Assert ---
+    with pytest.raises(ValueError, match="does not support relationship keys"):
+        Item.update({"variant": new_a}, where=Item.c.id == 1)
+
+
+class Tag(SQLDataclass, table=True):
+    __tablename__ = "polyfk_test_tag"
+    id: int | None = Field(default=None, primary_key=True)
+    label: str
+
+
+class Bookmark(SQLDataclass, table=True):
+    """Two polymorphic FKs to the SAME target table — primary vs backup tag."""
+
+    __tablename__ = "polyfk_test_bookmark"
+    id: int | None = Field(default=None, primary_key=True)
+    role: str  # discriminator
+    primary_tag_id: int | None = Field(default=None, foreign_key="polyfk_test_tag.id")
+    backup_tag_id: int | None = Field(default=None, foreign_key="polyfk_test_tag.id")
+    tag: Tag | None = Relationship(
+        discriminator="role",
+        polymorphic_fks={
+            "primary": ("primary_tag_id", Tag),
+            "backup": ("backup_tag_id", Tag),
+        },
+    )
+
+
+@pytest.fixture
+def bookmark_engine() -> Any:
+    engine = create_engine("sqlite:///:memory:")
+    for cls in (Tag, Bookmark):
+        cls.__table__.create(engine, checkfirst=True)
+    SQLDataclass.bind(engine)
+    yield engine
+    _model._BOUND_ENGINE = None
+
+
+def test_same_target_class_via_two_fks_loads_correctly(bookmark_engine: Any) -> None:
+    """Two polymorphic_fks entries pointing at the same target class join via
+    SA aliases — no 'ambiguous column' error, each variant resolves to the
+    right row."""
+    primary = Tag(label="prim")
+    primary.insert()
+    backup = Tag(label="back")
+    backup.insert()
+    Bookmark(
+        id=1,
+        role="primary",
+        primary_tag_id=primary.id,
+        backup_tag_id=backup.id,
+    ).insert()
+    Bookmark(
+        id=2,
+        role="backup",
+        primary_tag_id=primary.id,
+        backup_tag_id=backup.id,
+    ).insert()
+
+    bookmarks = Bookmark.load_all(order_by=Bookmark.c.id)
+
+    # --- Assert ---
+    assert bookmarks[0].tag is not None
+    assert bookmarks[0].tag.label == "prim"
+    assert bookmarks[1].tag is not None
+    assert bookmarks[1].tag.label == "back"
+
+
+def test_update_with_fk_columns_directly_works(bound_engine: Any) -> None:
+    """The recommended path: update the FK and discriminator columns directly."""
+    a = CatalogA(label_a="alpha")
+    a.insert()
+    b = CatalogB(label_b="beta")
+    b.insert()
+    Item(id=1, category="A", a_id=a.id).insert()
+
+    # Move from variant A to variant B by updating columns directly.
+    Item.update(
+        {"category": "B", "a_id": None, "b_id": b.id},
+        where=Item.c.id == 1,
+    )
+    item = Item.load_one(where=Item.c.id == 1)
+
+    # --- Assert ---
+    assert item is not None
+    assert isinstance(item.variant, CatalogB)
+    assert item.variant.label_b == "beta"
