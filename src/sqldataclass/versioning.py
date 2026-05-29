@@ -2,6 +2,33 @@
 
 Provides version field auto-naming, migration context, and helpers used
 by both the dataclass metaclass and the BaseModel __init_subclass__ paths.
+
+Migration contextvar
+====================
+
+SQLDataclass uses a contextvar to signal "we are deserializing legacy data —
+run ``migrate()`` on the incoming dict". By default this is SD's own
+``__DO_MIGRATION__``; ``cls.load(data)`` toggles it on, validators check it.
+
+For integration with host systems that already have their own migration
+contextvar (e.g. a project where ``LegacyParent.load()`` sets a different
+``ContextVar`` and constructs SD classes nested inside its blob), override
+SD's built-in by declaring ``__migration_contextvar__`` on the class:
+
+    from contextvars import ContextVar
+
+    HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
+
+    class Foo(SQLDataclass, versioned=True):
+        __migration_contextvar__ = HOST_DO_MIGRATION
+        ...
+
+SD's validator on ``Foo`` will then read ``HOST_DO_MIGRATION`` instead of
+the built-in one, and ``LegacyParent.load()`` will correctly trigger
+``Foo.migrate()`` for nested ``Foo`` instances.
+
+The override lives alongside other class-body configuration (``__tablename__``,
+``__table_args__``, ``__discriminator__``) — same shape, no special tooling.
 """
 
 from __future__ import annotations
@@ -20,6 +47,9 @@ __DO_MIGRATION__: ContextVar[bool] = ContextVar("__DO_MIGRATION__", default=Fals
 Set to True inside ``load()`` and reset in a finally block.  Nested models
 automatically participate because the context var propagates through pydantic
 validator calls.
+
+Users can override on a per-class basis by passing their own ``ContextVar``
+as ``versioned=`` — see the module docstring.
 """
 
 # ---------------------------------------------------------------------------
