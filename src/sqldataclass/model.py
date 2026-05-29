@@ -230,6 +230,7 @@ class SAColumnInfo:
     sa_type: Any = None
     server_default: Any = None
     sa_column_kwargs: dict[str, Any] | None = None
+    server_managed: bool = False  # True ⇒ never write from Python; read back via RETURNING
 
 
 def _get_sa_info(field_info: FieldInfo) -> SAColumnInfo | None:
@@ -306,6 +307,7 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
     server_default: Any = None,
     sa_column_kwargs: dict[str, Any] | None = None,
     column: bool = True,
+    server_managed: bool = False,  # exclude from all writes; populate via RETURNING
     # Pydantic params (passed through)
     alias: str | None = None,
     title: str | None = None,
@@ -334,6 +336,7 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
         server_default=server_default,
         sa_column_kwargs=sa_column_kwargs,
         column=column,
+        server_managed=server_managed,
     )
 
     pydantic_kwargs: dict[str, Any] = {
@@ -1217,6 +1220,7 @@ class SQLDataclassMeta(type):
         table_parent = _find_table_parent(bases)
         if table_parent is not None and not table:
             exclude = kwargs.pop("exclude", None) or frozenset()
+            include = kwargs.pop("include", None)
             response: type = _build_response_model(
                 mcs,
                 name,
@@ -1224,6 +1228,7 @@ class SQLDataclassMeta(type):
                 namespace,
                 table_parent,
                 exclude=frozenset(exclude),
+                include=frozenset(include) if include is not None else None,
             )
             return response
 
@@ -1385,7 +1390,7 @@ def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inhe
     return dc_cls
 
 
-def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signature
+def _build_response_model(  # noqa: PLR0912, PLR0913, PLR0915  # subset-view builder; include/exclude composition adds branches
     mcs: type,
     name: str,
     bases: tuple[type, ...],
@@ -1393,21 +1398,32 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
     parent: Any,
     *,
     exclude: frozenset[str] = frozenset(),
+    include: frozenset[str] | None = None,
 ) -> Any:
     """Build a pure pydantic dataclass that inherits fields from a table=True parent.
 
     The child has no SQLAlchemy table, no convenience methods (load_all, insert, etc.),
     and is not registered in the model registry. It is suitable for use as a FastAPI
     response model.
+
+    ``exclude`` removes named fields from the parent set; ``include`` (when set)
+    keeps *only* the named fields (allowlist). When both are passed, ``exclude``
+    is applied after ``include``. Child-declared fields are always kept regardless
+    of ``include``.
     """
     # Validate exclude against parent fields
     parent_field_names = set(parent.__pydantic_fields__) if hasattr(parent, "__pydantic_fields__") else set()
     child_annotations = namespace.get("__annotations__", {})
     available_fields = parent_field_names | set(child_annotations)
-    unknown = exclude - available_fields
-    if unknown:
-        msg = f"{name}: exclude contains fields not present on parent or child: {unknown}"
+    unknown_exclude = exclude - available_fields
+    if unknown_exclude:
+        msg = f"{name}: exclude contains fields not present on parent or child: {unknown_exclude}"
         raise TypeError(msg)
+    if include is not None:
+        unknown_include = include - available_fields
+        if unknown_include:
+            msg = f"{name}: include contains fields not present on parent or child: {unknown_include}"
+            raise TypeError(msg)
 
     # Merge parent annotations + defaults into child namespace (same approach as _build_sti_child)
     # Use get_type_hints with include_extras=True to preserve Annotated metadata (e.g. UnitMeta),
@@ -1433,7 +1449,18 @@ def _build_response_model(  # noqa: PLR0913  # mirrors _build_sti_child signatur
             elif pfield.default_factory is not None:
                 namespace[field_name] = PydanticField(default_factory=pfield.default_factory)
 
-    # Apply exclude: remove from annotations and defaults
+    # Apply include first (allowlist of parent fields; child-declared fields always pass).
+    if include is not None:
+        child_only = set(child_annotations)
+        for field_name in list(merged_annotations):
+            if field_name in child_only:
+                continue
+            if field_name not in include:
+                merged_annotations.pop(field_name, None)
+                namespace.pop(field_name, None)
+
+    # Apply exclude: remove from annotations and defaults. Exclude wins when
+    # both are passed for the same field.
     for field_name in exclude:
         merged_annotations.pop(field_name, None)
         namespace.pop(field_name, None)
@@ -1691,9 +1718,10 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     table_args = namespace.pop("__table_args__", None)
     target_metadata = _find_metadata(bases)
 
-    # Detect non-column fields and relationships
+    # Detect non-column, relationship, and server-managed fields
     relationship_fields: set[str] = set()
     non_column_fields: set[str] = set()
+    server_managed_fields: set[str] = set()
     resolved_rels: dict[str, _ResolvedRelationship] = {}
     for field_name in annotations:
         default_val = namespace.get(field_name)
@@ -1701,11 +1729,15 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
             relationship_fields.add(field_name)
         elif isinstance(default_val, FieldInfo):
             sa_info = _get_sa_info(default_val)
-            if sa_info is not None and not sa_info.column:
+            if sa_info is None:
+                continue
+            if not sa_info.column:
                 # column=False fields may or may not declare a default. If they don't,
                 # pydantic enforces required-at-construction via its own validator,
                 # which produces a clearer error path than a hand-rolled TypeError here.
                 non_column_fields.add(field_name)
+            if sa_info.server_managed:
+                server_managed_fields.add(field_name)
 
     # Build SA table before pydantic transforms the class
     sa_table: Table | None = None
@@ -1779,6 +1811,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
                     pass  # target table not yet created, will use slow path
         dc_cls.__fk_map__ = fk_map
         dc_cls.__table_col_names__ = frozenset(c.name for c in sa_table.columns)
+        dc_cls.__server_managed_columns__ = frozenset(server_managed_fields)
         _attach_convenience_methods(dc_cls)
         # Register for forward reference resolution
         _MODEL_REGISTRY[tablename] = dc_cls
@@ -1856,6 +1889,24 @@ def _apply_discriminator_filter(klass: Any, where: Any) -> Any:
     if where is not None:
         return disc_filter & where
     return disc_filter
+
+
+def _apply_default_where(klass: Any, where: Any, apply: bool) -> Any:  # noqa: FBT001  # bool flag is the opt-out switch
+    """If ``klass.__default_where__`` is set and ``apply`` is True, AND it into ``where``.
+
+    ``__default_where__`` may be a callable returning a SA expression (recommended,
+    so the expression is built lazily after ``__table__`` is constructed) or a
+    plain SA expression.
+    """
+    if not apply:
+        return where
+    default = getattr(klass, "__default_where__", None)
+    if default is None:
+        return where
+    expr = default() if callable(default) else default
+    if where is not None:
+        return expr & where
+    return expr
 
 
 def _apply_discriminator_on_insert(klass: Any, flat: dict[str, Any]) -> dict[str, Any]:
@@ -2053,9 +2104,17 @@ def _jti_delete(klass: Any, conn: Connection, where: Any) -> int:
 def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches many methods in one pass
     """Attach query/write convenience methods to a table class."""
 
-    def _select(klass: Any) -> Any:
-        """Build a ``SELECT`` for this table."""
-        return sa_select(klass.__table__)
+    def _select(klass: Any, *, apply_default_where: bool = True) -> Any:
+        """Build a ``SELECT`` for this table.
+
+        If the class declares ``__default_where__``, the resulting select is
+        pre-filtered. Pass ``apply_default_where=False`` to skip.
+        """
+        stmt = sa_select(klass.__table__)
+        default = _apply_default_where(klass, None, apply_default_where)
+        if default is not None:
+            stmt = stmt.where(default)
+        return stmt
 
     def _model_load_all(  # noqa: PLR0913  # mirrors query.load_all signature
         klass: Any,
@@ -2064,15 +2123,28 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         order_by: Any = None,
         limit: int | None = None,
         offset: int | None = None,
+        apply_default_where: bool = True,  # noqa: FBT001, FBT002  # opt-out switch for __default_where__
     ) -> list[Any]:
         """Load all matching rows as instances of this class.
 
         If *conn* is ``None``, auto-creates a connection from the bound engine.
+        If the class declares ``__default_where__``, it is AND-combined with
+        any caller-supplied ``where``. Set ``apply_default_where=False`` to skip.
         """
         where = _apply_discriminator_filter(klass, where)
+        where = _apply_default_where(klass, where, apply_default_where)
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
-                return _model_load_all(klass, auto_conn, where=where, order_by=order_by, limit=limit, offset=offset)
+                # Already-applied filters are baked into `where`; skip in recursive call.
+                return _model_load_all(
+                    klass,
+                    auto_conn,
+                    where=where,
+                    order_by=order_by,
+                    limit=limit,
+                    offset=offset,
+                    apply_default_where=False,
+                )
 
         def _apply_pagination(q: Any) -> Any:
             if limit is not None:
@@ -2111,12 +2183,27 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         _populate_scalar_chains(results, conn, _depth=0)
         return results
 
-    def _model_load_one(klass: Any, conn: Connection | None = None, where: Any = None) -> Any | None:  # noqa: PLR0911  # JTI adds one more return path
-        """Load a single row, or ``None`` if not found."""
+    def _model_load_one(  # noqa: PLR0911  # JTI + default-where add return paths
+        klass: Any,
+        conn: Connection | None = None,
+        where: Any = None,
+        apply_default_where: bool = True,  # noqa: FBT001, FBT002  # opt-out switch for __default_where__
+    ) -> Any | None:
+        """Load a single row, or ``None`` if not found.
+
+        Applies ``__default_where__`` if declared. Pass
+        ``apply_default_where=False`` to skip.
+        """
         where = _apply_discriminator_filter(klass, where)
+        where = _apply_default_where(klass, where, apply_default_where)
         if conn is None:
             with _get_engine(klass).connect() as auto_conn:
-                return _model_load_one(klass, auto_conn, where=where)
+                return _model_load_one(
+                    klass,
+                    auto_conn,
+                    where=where,
+                    apply_default_where=False,
+                )
 
         is_jti = getattr(klass, "__sqldataclass_is_jti_child__", False)
         rels: dict[str, _ResolvedRelationship] = getattr(klass, "__relationships__", {})
@@ -2213,12 +2300,47 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         flat = _flatten_for_table(self)
         _upsert_row_returning(conn, type(self), self, flat, index_elements=index_elements)
 
-    def _model_update(klass: Any, values: dict[str, Any], conn: Connection | None = None, where: Any = None) -> int:
-        """Update rows matching *where* with *values*. Returns number of rows updated."""
+    def _model_update(
+        klass: Any,
+        values: dict[str, Any],
+        conn: Connection | None = None,
+        where: Any = None,
+        apply_default_where: bool = True,  # noqa: FBT001, FBT002  # opt-out switch for __default_where__
+    ) -> int:
+        """Update rows matching *where* with *values*. Returns number of rows updated.
+
+        Applies ``__default_where__`` if declared. Pass
+        ``apply_default_where=False`` to update across the default filter.
+
+        Raises ``ValueError`` if *values* contains a column declared
+        ``server_managed=True`` — those columns are DB-owned (e.g. via a
+        BEFORE INSERT/UPDATE trigger) and must not be written from Python.
+        """
+        server_managed: frozenset[str] = getattr(
+            klass,
+            "__server_managed_columns__",
+            frozenset(),
+        )
+        if server_managed:
+            attempted = set(values) & server_managed
+            if attempted:
+                msg = (
+                    f"{klass.__name__}.update() refused: columns "
+                    f"{sorted(attempted)} are server_managed=True and "
+                    "cannot be written from Python."
+                )
+                raise ValueError(msg)
         where = _apply_discriminator_filter(klass, where)
+        where = _apply_default_where(klass, where, apply_default_where)
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
-                return _model_update(klass, values, auto_conn, where=where)
+                return _model_update(
+                    klass,
+                    values,
+                    auto_conn,
+                    where=where,
+                    apply_default_where=False,
+                )
 
         if getattr(klass, "__sqldataclass_is_jti_child__", False):
             return _jti_update(klass, values, conn, where)
@@ -2229,12 +2351,27 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         result = conn.execute(stmt)
         return result.rowcount
 
-    def _model_delete(klass: Any, conn: Connection | None = None, where: Any = None) -> int:
-        """Delete rows matching *where*. Returns number of rows deleted."""
+    def _model_delete(
+        klass: Any,
+        conn: Connection | None = None,
+        where: Any = None,
+        apply_default_where: bool = True,  # noqa: FBT001, FBT002  # opt-out switch for __default_where__
+    ) -> int:
+        """Delete rows matching *where*. Returns number of rows deleted.
+
+        Applies ``__default_where__`` if declared. Pass
+        ``apply_default_where=False`` to delete across the default filter.
+        """
         where = _apply_discriminator_filter(klass, where)
+        where = _apply_default_where(klass, where, apply_default_where)
         if conn is None:
             with _get_engine(klass).begin() as auto_conn:
-                return _model_delete(klass, auto_conn, where=where)
+                return _model_delete(
+                    klass,
+                    auto_conn,
+                    where=where,
+                    apply_default_where=False,
+                )
 
         if getattr(klass, "__sqldataclass_is_jti_child__", False):
             return _jti_delete(klass, conn, where)
