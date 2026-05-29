@@ -252,12 +252,21 @@ class RelationshipInfo:
     For one-to-many: type hint is ``list[ChildModel]``.
     For many-to-many: type hint is ``list[TargetModel]`` with ``link_model`` set.
     For discriminated unions: set ``discriminator`` to the column that selects the variant.
+
+    ``foreign_key`` (str) — the name of an existing local FK column on this model.
+    Use when the FK column doesn't follow the default ``{relationship_name}_id``
+    convention (e.g. a domain-named ``account_id`` linking to an ``Account``
+    relationship). Setting this suppresses the auto-injection of
+    ``{relationship_name}_id``; the named local column is used as the join source.
+    Note: this is the *local* column name on the parent model, not the
+    ``target_table.target_col`` string used by ``Field(foreign_key=...)``.
     """
 
     discriminator: str | None = None
     back_populates: str | None = None
     link_model: Any = None
     order_by: str | None = None
+    foreign_key: str | None = None
 
 
 def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
@@ -359,13 +368,14 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
     return field_info
 
 
-def Relationship(
+def Relationship(  # noqa: PLR0913  # documented kwargs surface
     default: Any = _UNSET,
     *,
     back_populates: str | None = None,
     link_model: Any = None,
     discriminator: str | None = None,
     order_by: str | None = None,
+    foreign_key: str | None = None,
 ) -> Any:
     """Mark a field as a relationship — not stored as a database column.
 
@@ -388,12 +398,22 @@ def Relationship(
     Ordered collection::
 
         heroes: list[Hero] = Relationship(back_populates="team", order_by="name")
+
+    Many-to-one bound to a domain-named FK column on this model::
+
+        account_id: int = Field(foreign_key="accounts.id")
+        account: Account | None = Relationship(foreign_key="account_id")
+
+    The ``foreign_key`` here names the *local* column on this model (the
+    column that already declares ``Field(foreign_key=...)`` pointing at the
+    target). It suppresses the default auto-injection of ``{name}_id``.
     """
     rel_info = RelationshipInfo(
         discriminator=discriminator,
         back_populates=back_populates,
         link_model=link_model,
         order_by=order_by,
+        foreign_key=foreign_key,
     )
 
     pydantic_kwargs: dict[str, Any] = {}
@@ -479,8 +499,28 @@ def _inject_implicit_fk_fields(
     Mutates *resolved_hints*, *namespace*, and *annotations* in place.
     Only acts on scalar (non-list, non-discriminated) relationship fields
     whose target class has a ``__tablename__`` and a primary-key column.
+
+    Skips injection for any relationship whose ``RelationshipInfo.foreign_key``
+    is set — that case explicitly binds the relationship to a local column
+    declared elsewhere on the model.
     """
     for field_name in list(relationship_fields):
+        # Honor explicit Relationship(foreign_key="<local_col>"): skip injection
+        # and instead validate that the named local column exists.
+        rel_default = namespace.get(field_name)
+        rel_info = _get_rel_info(rel_default) if isinstance(rel_default, FieldInfo) else None
+        if rel_info is not None and rel_info.foreign_key is not None:
+            local_fk_name = rel_info.foreign_key
+            if local_fk_name not in resolved_hints and local_fk_name not in annotations:
+                msg = (
+                    f"Relationship {field_name!r} declares foreign_key="
+                    f"{local_fk_name!r} but no such field is defined on the model. "
+                    "The foreign_key argument names a local column that must also "
+                    "be declared via Field(foreign_key='target.column')."
+                )
+                raise TypeError(msg)
+            continue
+
         fk_field_name = f"{field_name}_id"
         if fk_field_name in resolved_hints or fk_field_name in annotations:
             continue  # explicit FK already declared
@@ -1649,13 +1689,9 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         elif isinstance(default_val, FieldInfo):
             sa_info = _get_sa_info(default_val)
             if sa_info is not None and not sa_info.column:
-                # column=False fields must have a default (DB load won't provide a value)
-                if default_val.default is PydanticUndefined and default_val.default_factory is None:
-                    msg = (
-                        f"Field '{field_name}' has column=False but no default value. "
-                        "Non-persistent fields must have a default or default_factory."
-                    )
-                    raise TypeError(msg)
+                # column=False fields may or may not declare a default. If they don't,
+                # pydantic enforces required-at-construction via its own validator,
+                # which produces a clearer error path than a hand-rolled TypeError here.
                 non_column_fields.add(field_name)
 
     # Build SA table before pydantic transforms the class

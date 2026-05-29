@@ -2,6 +2,43 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.2.7] - 2026-05-29
+
+### Fixed
+- **`from_psycopg` no longer silently rolls back the caller's transaction.** SA's
+  default dialect initialization calls `do_rollback()` in the `finally` of
+  `dialect.initialize()`, and the pool's default `pool_reset_on_return='rollback'`
+  fires again when the SAConnection is returned. Both wiped any uncommitted writes
+  the caller had made through the original cursor before calling `from_psycopg`.
+  The wrapper now patches `engine.dialect.do_rollback` to a no-op for the duration
+  of the first `engine.connect()` (then restores it) and sets
+  `pool_reset_on_return=None`. The documented contract — *the SAConnection shares
+  the caller's transaction* — now actually holds.
+
+### Added
+- **psycopg2 support in `from_psycopg`.** The driver is detected from the
+  object's type; psycopg (v3) and psycopg2 cursors / connections are both
+  accepted. The appropriate SQLAlchemy URL (`postgresql+psycopg://` or
+  `postgresql+psycopg2://`) is selected automatically. Existing psycopg (v3)
+  callers are unaffected.
+- **`Relationship(foreign_key="<local_col>")`** binds a many-to-one
+  relationship to an existing FK column on the model whose name doesn't
+  follow the default `{relationship}_id` convention:
+  ```python
+  class Hero(SQLDataclass, table=True):
+      account_id: int = Field(foreign_key="accounts.id")
+      account: Account | None = Relationship(foreign_key="account_id")
+  ```
+  Suppresses the auto-injected `account_id` column (which would normally come
+  from naming the relationship `account`). Raises a clear `TypeError` at class
+  construction if the named local column doesn't exist.
+
+### Changed
+- **`Field(column=False)` no longer requires a default at class construction.**
+  Previously raised a `TypeError`; now defers to pydantic's normal required-field
+  validation at instance construction (produces a clearer `ValidationError` with
+  the field path). Existing code with explicit defaults is unaffected.
+
 ## [0.1.2] - 2026-03-25
 
 ### Added

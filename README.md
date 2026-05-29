@@ -555,7 +555,27 @@ class User(SQLDataclass, table=True):
 | `link_model` | `type` | Link table class for many-to-many |
 | `discriminator` | `str` | Column name for discriminated unions |
 | `order_by` | `str` | Column name to sort collection children by |
+| `foreign_key` | `str` | Name of an existing local FK column to bind this relationship to (suppresses the default `{name}_id` auto-injection). |
 | `default` | `Any` | Default value (`None` for many-to-one, `[]` for collections) |
+
+### Binding a relationship to a domain-named FK column
+
+By default, a many-to-one relationship named `account` auto-creates an `account_id`
+column. If your FK column has a different name (e.g. `account_id` already exists
+under another convention, or the relationship name is `owner` but the FK column
+is `account_id`), pass `foreign_key=` to bind explicitly:
+
+```python
+class Profile(SQLDataclass, table=True):
+    id: int = Field(primary_key=True)
+    account_id: int = Field(foreign_key="accounts.id")
+    owner: Account | None = Relationship(foreign_key="account_id")
+```
+
+The `foreign_key` argument names the **local column on this model** (the one
+that declares `Field(foreign_key="target.col")`). This contrasts with
+`Field(foreign_key="<table>.<col>")`, which names the *target* of the FK
+constraint.
 
 ## Table arguments
 
@@ -870,16 +890,27 @@ def get_user(
 
 ## psycopg compatibility
 
-If your codebase uses raw psycopg3 cursors, `from_psycopg()` wraps them into an SQLAlchemy Connection that works with SQLDataclass — sharing the same underlying transaction:
+If your codebase uses raw psycopg cursors, `from_psycopg()` wraps them into an SQLAlchemy Connection that works with SQLDataclass — sharing the same underlying transaction. Both **psycopg (v3)** and **psycopg2** are supported; the driver is detected from the object's type and the appropriate SQLAlchemy URL is selected automatically.
 
 ```python
 from sqldataclass import from_psycopg
 
-sa_conn = from_psycopg(cur)            # from a psycopg cursor
-sa_conn = from_psycopg(psycopg_conn)   # from a psycopg connection
+sa_conn = from_psycopg(cur)            # psycopg or psycopg2 cursor
+sa_conn = from_psycopg(psycopg_conn)   # psycopg or psycopg2 connection
 
 heroes = Hero.load_all(sa_conn, where=Hero.c.age > 30)
 ```
+
+**Transaction semantics.** The returned SAConnection shares the caller's psycopg
+transaction: uncommitted writes made through the original cursor are visible via
+the SAConnection, and SD will not commit or roll back the underlying connection
+on the caller's behalf. The caller owns the connection lifecycle; closing the
+SAConnection does **not** close the underlying psycopg connection.
+
+> If the underlying psycopg connection has a custom `cursor_factory` that
+> returns non-tuple rows (e.g. a DictCursor variant), SA's dialect introspection
+> will fail. Reset the factory to `None` before calling `from_psycopg`, or pass a
+> tuple-cursor connection.
 
 Repositories also accept psycopg cursors directly:
 
