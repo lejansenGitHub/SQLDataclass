@@ -1377,7 +1377,7 @@ def _make_migration_validator(
     """Create a pydantic before-validator for versioned dataclass migration.
 
     The validator reads ``migration_cv`` — the class's bound migration
-    contextvar (either SD's built-in or a user-supplied one). When the
+    contextvar (either SQLDataclass's built-in or a user-supplied one). When the
     contextvar is True, the incoming dict is run through ``cls.migrate()``.
     """
     from pydantic import model_validator
@@ -1881,9 +1881,9 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
     # Resolve the migration contextvar for versioned models. The class may
-    # override SD's built-in by declaring ``__migration_contextvar__`` at
+    # override SQLDataclass's built-in by declaring ``__migration_contextvar__`` at
     # class-body scope (alongside ``__tablename__``, ``__table_args__``);
-    # otherwise SD's ``__DO_MIGRATION__`` is used.
+    # otherwise SQLDataclass's ``__DO_MIGRATION__`` is used.
     migration_cv: ContextVar[bool] | None = None
     if versioned:
         override = namespace.get("__migration_contextvar__")
@@ -2617,7 +2617,7 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         For versioned models, this triggers migration if the data has an
         older schema version (or no version key at all). The contextvar
         toggled here is the one bound at class-construction time
-        (``cls.__migration_contextvar__``) — either SD's built-in
+        (``cls.__migration_contextvar__``) — either SQLDataclass's built-in
         ``__DO_MIGRATION__`` or a user-supplied ``ContextVar[bool]``.
         """
         migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)

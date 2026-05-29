@@ -903,7 +903,7 @@ heroes = Hero.load_all(sa_conn, where=Hero.c.age > 30)
 
 **Transaction semantics.** The returned SAConnection shares the caller's psycopg
 transaction: uncommitted writes made through the original cursor are visible via
-the SAConnection, and SD will not commit or roll back the underlying connection
+the SAConnection, and SQLDataclass will not commit or roll back the underlying connection
 on the caller's behalf. The caller owns the connection lifecycle; closing the
 SAConnection does **not** close the underlying psycopg connection.
 

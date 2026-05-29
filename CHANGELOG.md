@@ -8,7 +8,7 @@ All notable changes to SQLDataclass will be documented in this file.
 
 - **Polymorphic `Model.update({"<relationship>": ...})` produces a clear
   error** instead of an opaque `CompileError`. Routing a relationship through
-  UPDATE has no safe semantic across many rows; SD now raises `ValueError`
+  UPDATE has no safe semantic across many rows; SQLDataclass now raises `ValueError`
   with guidance to update the FK column(s) + discriminator directly.
 - **Polymorphic FK with two entries pointing at the same target class**
   (e.g. `{"primary": ("primary_id", Tag), "backup": ("backup_id", Tag)}`)
@@ -70,7 +70,7 @@ All notable changes to SQLDataclass will be documented in this file.
   `Relationship(discriminator="...")` pattern: that one models *ownership*
   (variant.id IS parent.id, 1:1), this one models *polymorphic reference*
   (parent.fk_X = variant.id, N:1; variants have their own PKs and lifecycles).
-  Both forms coexist; SD chooses based on whether `polymorphic_fks=` is set.
+  Both forms coexist; SQLDataclass chooses based on whether `polymorphic_fks=` is set.
 
 ### Changed
 
@@ -150,7 +150,7 @@ All notable changes to SQLDataclass will be documented in this file.
 
   HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
 
-  # Default — uses SD's built-in __DO_MIGRATION__:
+  # Default — uses SQLDataclass's built-in __DO_MIGRATION__:
   class Hero(SQLDataclass, versioned=True):
       HERO_VERSION: int = Field(default=1)
       ...
