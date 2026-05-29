@@ -2,6 +2,43 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.2.9] - 2026-05-29
+
+### Changed
+- **Redesigned the B1 contextvar-bridging API.** v0.2.8 introduced a
+  polymorphic `versioned: bool | ContextVar[bool]` kwarg; v0.2.9 splits the
+  two concerns:
+  - `versioned: bool` stays a pure flag — `True`/`False` only.
+  - The contextvar override is declared in the class body as
+    `__migration_contextvar__`, alongside `__tablename__`,
+    `__table_args__`, etc.
+
+  ```python
+  from contextvars import ContextVar
+
+  HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
+
+  # Default — uses SD's built-in __DO_MIGRATION__:
+  class Hero(SQLDataclass, versioned=True):
+      HERO_VERSION: int = Field(default=1)
+      ...
+
+  # External contextvar — declared at class-body scope:
+  class Order(SQLDataclass, versioned=True):
+      __migration_contextvar__ = HOST_DO_MIGRATION
+      ORDER_VERSION: int = Field(default=2)
+      ...
+  ```
+
+  The override is validated at class construction; passing anything other
+  than a `ContextVar` raises a clear `TypeError`. Inheritance follows
+  Python's normal MRO, so a base class can set the override once for a
+  whole hierarchy.
+
+  **Breaking change:** `versioned=<ContextVar>` (the v0.2.8 form) is removed
+  outright. v0.2.8 was published 10 minutes before v0.2.9 and has no known
+  downstream usage; the API is corrected before it spreads.
+
 ## [0.2.8] - 2026-05-29
 
 ### Fixed
@@ -19,21 +56,8 @@ All notable changes to SQLDataclass will be documented in this file.
   `SQLDataclass.dump(self)` explicit base call.
 
 ### Added
-- **`versioned=` accepts a `ContextVar[bool]`** (B1) to bridge SD's migration
-  validator with an external host system's contextvar:
-  ```python
-  from contextvars import ContextVar
-
-  HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
-
-  class Order(SQLDataclass, versioned=HOST_DO_MIGRATION):
-      ORDER_VERSION: int = Field(default=2)
-      ...
-  ```
-  `versioned=True` keeps using SD's built-in contextvar (backward compatible).
-  When a `ContextVar` is passed, `cls.load()` toggles that one — and host code
-  that already sets the same contextvar will trigger SD's `migrate()` on nested
-  SD instances correctly.
+- **`versioned=` accepts a `ContextVar[bool]`** (B1, superseded by v0.2.9).
+  See v0.2.9 for the final API.
 
 ## [0.2.7] - 2026-05-29
 

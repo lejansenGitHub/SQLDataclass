@@ -1180,7 +1180,7 @@ class SQLDataclassMeta(type):
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
-        versioned: bool | ContextVar[bool] = False,  # noqa: FBT001, FBT002  # accepts bool flag or explicit ContextVar
+        versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag; override the contextvar via __migration_contextvar__ class attr
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -1682,7 +1682,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     namespace: dict[str, Any],
     *,
     table: bool,
-    versioned: bool | ContextVar[bool] = False,
+    versioned: bool = False,
     **kwargs: Any,
 ) -> Any:
     """Core logic for building a SQLDataclass (called from metaclass __new__)."""
@@ -1732,25 +1732,20 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         # Resolve relationships (needs resolved type hints)
         resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
-    # Resolve the migration contextvar:
-    # - False  → no versioning.
-    # - True   → use SD's built-in __DO_MIGRATION__.
-    # - ContextVar → use the caller-supplied one (bridges with external systems).
-    if isinstance(versioned, ContextVar):
-        migration_cv: ContextVar[bool] | None = versioned
-        is_versioned = True
-    elif versioned:
-        migration_cv = __DO_MIGRATION__
-        is_versioned = True
-    else:
-        migration_cv = None
-        is_versioned = False
+    # Resolve the migration contextvar for versioned models. The class may
+    # override SD's built-in by declaring ``__migration_contextvar__`` at
+    # class-body scope (alongside ``__tablename__``, ``__table_args__``);
+    # otherwise SD's ``__DO_MIGRATION__`` is used.
+    migration_cv: ContextVar[bool] | None = None
+    if versioned:
+        override = namespace.get("__migration_contextvar__")
+        migration_cv = override if override is not None else __DO_MIGRATION__
+        if not isinstance(migration_cv, ContextVar):
+            msg = f"{name}.__migration_contextvar__ must be a ContextVar[bool], got {type(migration_cv).__name__}"
+            raise TypeError(msg)
 
-    # Versioned models: inject a before-validator for migration
-    if is_versioned:
         from pydantic_core import ArgsKwargs
 
-        assert migration_cv is not None  # is_versioned ⇒ migration_cv is set
         namespace["__validator_migration"] = _make_migration_validator(
             ArgsKwargs,
             migration_cv,
@@ -1764,7 +1759,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
 
     # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
-    dc_cls.__versioned__ = is_versioned
+    dc_cls.__versioned__ = bool(versioned)
     dc_cls.__migration_contextvar__ = migration_cv
     dc_cls.__relationships__ = resolved_rels
     dc_cls.__non_column_fields__ = frozenset(non_column_fields)

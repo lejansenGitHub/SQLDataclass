@@ -79,7 +79,7 @@ class SQLModel(pydantic.BaseModel):
     def __init_subclass__(
         cls,
         table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by class keyword syntax
-        versioned: bool | ContextVar[bool] = False,  # noqa: FBT001, FBT002  # accepts bool flag or ContextVar
+        versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag; override the contextvar via __migration_contextvar__ class attr
         **kwargs: Any,
     ) -> None:
         super().__init_subclass__(**kwargs)
@@ -90,29 +90,29 @@ class SQLModel(pydantic.BaseModel):
                 msg = f"{cls.__name__} cannot inherit from both SQLModel and SQLDataclass. Use composition instead."
                 raise TypeError(msg)
 
-        # Resolve the migration contextvar:
-        # - False  → no versioning.
-        # - True   → SD's built-in __DO_MIGRATION__.
-        # - ContextVar → caller-supplied (bridges with external migration systems).
-        if isinstance(versioned, ContextVar):
-            migration_cv: ContextVar[bool] | None = versioned
-            is_versioned = True
-        elif versioned:
-            migration_cv = __DO_MIGRATION__
-            is_versioned = True
-        else:
-            migration_cv = None
-            is_versioned = False
+        # Resolve the migration contextvar for versioned models. The class may
+        # override SD's built-in by declaring ``__migration_contextvar__``
+        # in its class body; otherwise SD's ``__DO_MIGRATION__`` is used.
+        migration_cv: ContextVar[bool] | None = None
+        if versioned:
+            override = cls.__dict__.get("__migration_contextvar__")
+            migration_cv = override if override is not None else __DO_MIGRATION__
+            if not isinstance(migration_cv, ContextVar):
+                msg = (
+                    f"{cls.__name__}.__migration_contextvar__ must be a "
+                    f"ContextVar[bool], got {type(migration_cv).__name__}"
+                )
+                raise TypeError(msg)
 
         # Store the table flag for __pydantic_init_subclass__ to use later
         cls.__sqlmodel_is_basemodel__ = True
         cls.__sqldataclass_is_table__ = table
-        cls.__versioned__ = is_versioned
+        cls.__versioned__ = bool(versioned)
         cls.__migration_contextvar__ = migration_cv  # type: ignore[attr-defined]  # set dynamically on subclasses
         cls.__relationships__ = {}
         cls.__non_column_fields__ = frozenset()
         cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
-        cls._sqlmodel_pending_versioned__ = is_versioned  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
+        cls._sqlmodel_pending_versioned__ = bool(versioned)  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:

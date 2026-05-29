@@ -1,11 +1,17 @@
-"""Tests for B1: versioned= accepts a user-supplied ContextVar[bool].
+"""Tests for the ``__migration_contextvar__`` class attribute.
 
-Use case: a host system has its own migration contextvar (set by its own
-``LegacyParent.load()``). When the host parent constructs a nested
-SQLDataclass child via pydantic validation, the child's ``migrate()`` must
-fire only when the host's contextvar is set. With ``versioned=True``, SD's
-built-in contextvar is used; passing the host's ``ContextVar[bool]``
-directly as ``versioned=`` bridges the two systems.
+Versioned models default to SD's built-in migration contextvar. Hosts that
+already have their own contextvar (set by their own ``LegacyParent.load()``)
+override SD's default by declaring ``__migration_contextvar__`` at class-body
+scope:
+
+    class Order(SQLDataclass, versioned=True):
+        __migration_contextvar__ = HOST_DO_MIGRATION
+        ORDER_VERSION: int = Field(default=2)
+
+SD's validator on ``Order`` reads ``HOST_DO_MIGRATION``; when the host sets
+that contextvar (e.g. from inside its own ``load()``), nested ``Order``
+instances are migrated correctly.
 """
 
 from __future__ import annotations
@@ -13,12 +19,15 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any
 
+import pytest
+
 from sqldataclass import Field, SQLDataclass
 
 HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
 
 
-class Order(SQLDataclass, versioned=HOST_DO_MIGRATION):
+class Order(SQLDataclass, versioned=True):
+    __migration_contextvar__ = HOST_DO_MIGRATION
     ORDER_VERSION: int = Field(default=2)
     order_id: int
     label: str = ""
@@ -32,8 +41,9 @@ class Order(SQLDataclass, versioned=HOST_DO_MIGRATION):
         return obj
 
 
-def test_external_contextvar_bound_at_class_construction() -> None:
-    """The class records the user-supplied ContextVar; SD's built-in is NOT used."""
+def test_class_attribute_overrides_builtin_contextvar() -> None:
+    """A class that declares __migration_contextvar__ binds to that one
+    instead of SD's __DO_MIGRATION__."""
     # --- Assert ---
     assert Order.__migration_contextvar__ is HOST_DO_MIGRATION
 
@@ -81,8 +91,9 @@ def test_host_can_drive_migration_directly() -> None:
         HOST_DO_MIGRATION.reset(token)
 
 
-def test_versioned_true_still_uses_sd_internal_contextvar() -> None:
-    """versioned=True keeps the built-in contextvar for backward compat."""
+def test_versioned_true_without_override_uses_sd_internal_contextvar() -> None:
+    """versioned=True with no __migration_contextvar__ declared defaults
+    to SD's built-in contextvar — the backward-compatible path."""
     from sqldataclass.versioning import __DO_MIGRATION__
 
     class Hero(SQLDataclass, versioned=True):
@@ -94,11 +105,13 @@ def test_versioned_true_still_uses_sd_internal_contextvar() -> None:
 
 
 def test_two_classes_with_distinct_contextvars_dont_interfere() -> None:
-    """Each versioned model honors its own contextvar; setting one doesn't trigger the other."""
+    """Each versioned model honors its own contextvar; setting one
+    doesn't trigger the other."""
     cv_a: ContextVar[bool] = ContextVar("cv_a", default=False)
     cv_b: ContextVar[bool] = ContextVar("cv_b", default=False)
 
-    class AmpA(SQLDataclass, versioned=cv_a):
+    class AmpA(SQLDataclass, versioned=True):
+        __migration_contextvar__ = cv_a
         AMP_A_VERSION: int = Field(default=1)
         value: int
 
@@ -107,7 +120,8 @@ def test_two_classes_with_distinct_contextvars_dont_interfere() -> None:
             obj["value"] = obj.get("value", -1) + 1000  # marker for migration
             return obj
 
-    class AmpB(SQLDataclass, versioned=cv_b):
+    class AmpB(SQLDataclass, versioned=True):
+        __migration_contextvar__ = cv_b
         AMP_B_VERSION: int = Field(default=1)
         value: int
 
@@ -127,3 +141,15 @@ def test_two_classes_with_distinct_contextvars_dont_interfere() -> None:
     # --- Assert ---
     assert a.value == 1005  # migrate ran for AmpA
     assert b.value == 5  # AmpB's contextvar was not set, no migration
+
+
+def test_non_contextvar_override_is_rejected() -> None:
+    """Setting __migration_contextvar__ to something that isn't a ContextVar
+    raises a clear TypeError at class construction."""
+    # --- Assert ---
+    with pytest.raises(TypeError, match="must be a ContextVar"):
+
+        class Broken(SQLDataclass, versioned=True):  # ad-hoc test class
+            __migration_contextvar__ = "not a contextvar"  # type: ignore[assignment]  # deliberate misuse
+            BROKEN_VERSION: int = Field(default=1)
+            name: str = ""
