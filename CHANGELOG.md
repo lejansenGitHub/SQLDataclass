@@ -2,6 +2,60 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.2.10] - 2026-05-29
+
+### Added — Phase B ergonomic features
+
+- **`__default_where__` class attribute** for soft-delete and scoped-read
+  patterns. Declared on a `table=True` class, it is AND-combined with any
+  caller-supplied `where=` on `load_all`, `load_one`, `update`, `delete`, and
+  `select`. Pass `apply_default_where=False` to bypass per call.
+
+  ```python
+  class Post(SQLDataclass, table=True):
+      __default_where__ = lambda: Post.c.deprecated.is_(False)
+      id: int | None = Field(default=None, primary_key=True)
+      title: str
+      deprecated: bool = False
+
+  Post.load_all()                              # implicit `WHERE NOT deprecated`
+  Post.load_all(where=Post.c.title == "x")    # AND'd with the default
+  Post.load_all(apply_default_where=False)     # bypass — returns everything
+  ```
+
+  Accepts a callable (recommended — lazy resolution avoids forward-reference
+  issues) or a static SA expression.
+
+- **`include=` class keyword for response models** — inverse of `exclude=`.
+  Allowlists are more robust than denylists for response/patch DTOs:
+
+  ```python
+  class HeroPublic(Hero, table=False, include={"id", "name"}):
+      pass  # only id and name are kept from the parent
+  ```
+
+  Composes with `exclude=` (exclude wins on conflict). Child-declared fields
+  are always kept regardless of `include`. Unknown field names raise
+  `TypeError` at class construction.
+
+- **`Field(server_managed=True)`** for DB-owned columns (BEFORE INSERT/UPDATE
+  triggers, computed columns, audit columns):
+
+  ```python
+  class Post(SQLDataclass, table=True):
+      id: int | None = Field(default=None, primary_key=True)
+      content: str
+      content_hash: int = Field(
+          default=0, server_managed=True, server_default="0",
+      )  # populated by a DB trigger; Python must never write it
+  ```
+
+  - Excluded from INSERT regardless of the Python-side value.
+  - Excluded from `insert_many` rows.
+  - `Model.update({"<server_managed_col>": ...})` raises `ValueError`.
+  - Read back via RETURNING on insert and via normal SELECT on load.
+  - Recorded on the class as `__server_managed_columns__` for introspection.
+
 ## [0.2.9] - 2026-05-29
 
 ### Changed

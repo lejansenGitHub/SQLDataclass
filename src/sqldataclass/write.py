@@ -106,6 +106,7 @@ def flatten_for_table(
     """Flatten a pydantic dataclass to a dict suitable for table insertion.
 
     Strips nested dicts (which belong to other tables), explicitly excluded keys,
+    ``server_managed`` columns (always — the DB owns them via trigger/computed),
     and (when strip_server_defaults=True) None values for columns with server
     defaults (SERIAL PKs, DEFAULT NOW(), etc.) so the database generates the value.
     """
@@ -116,9 +117,14 @@ def flatten_for_table(
     else:
         raise TypeError(f"Expected a dataclass instance, got {type(domain_object)}")
 
-    # Exclude relationship fields and column=False fields
+    # Exclude relationship fields, column=False fields, and server-managed columns
     rel_keys: set[str] = set(getattr(type(domain_object), "__relationships__", {}))
     non_column_keys: set[str] = set(getattr(type(domain_object), "__non_column_fields__", ()))
+    server_managed: frozenset[str] = getattr(
+        type(domain_object),
+        "__server_managed_columns__",
+        frozenset(),
+    )
     server_defaults = _server_defaulted_columns(type(domain_object)) if strip_server_defaults else frozenset()
     # Table columns are always included (even list/dict values for ARRAY/JSON types).
     # Use cached __table_col_names__ if available to avoid rebuilding the set per call.
@@ -134,6 +140,7 @@ def flatten_for_table(
         if key not in exclude_keys
         and key not in rel_keys
         and key not in non_column_keys
+        and key not in server_managed
         and not (
             key not in table_col_names
             and (
