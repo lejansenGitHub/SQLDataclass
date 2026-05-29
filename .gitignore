@@ -15,3 +15,7 @@ build/
 # Local working-tree artifacts (do not commit)
 SCHEMA_EXPORT_PLAN.md
 SQLDataclass_README.pdf
+
+# Coverage artifacts
+.coverage
+coverage.xml
