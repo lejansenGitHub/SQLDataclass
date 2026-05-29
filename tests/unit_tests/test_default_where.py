@@ -50,7 +50,10 @@ Order.__default_where__ = Order.c.archived.is_(False)
 @pytest.fixture
 def bound_engine() -> Any:
     engine = create_engine("sqlite:///:memory:")
-    SQLDataclass.metadata.create_all(engine)
+    # Per-table create avoids picking up unrelated ARRAY columns from sibling
+    # tests that share SQLDataclass.metadata (SQLite can't compile ARRAY).
+    Post.__table__.create(engine, checkfirst=True)
+    Order.__table__.create(engine, checkfirst=True)
     SQLDataclass.bind(engine)
     yield engine
     _model._BOUND_ENGINE = None
@@ -163,7 +166,7 @@ def test_no_default_where_means_no_filtering(bound_engine: Any) -> None:
         id: int | None = Field(default=None, primary_key=True)
         name: str
 
-    SQLDataclass.metadata.create_all(bound_engine)
+    Plain.__table__.create(bound_engine, checkfirst=True)
     Plain(name="a").insert()
     Plain(name="b").insert()
     rows = Plain.load_all()

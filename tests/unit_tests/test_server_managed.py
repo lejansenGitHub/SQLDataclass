@@ -39,7 +39,9 @@ class WithHash(SQLDataclass, table=True):
 @pytest.fixture
 def bound_engine() -> Any:
     engine = create_engine("sqlite:///:memory:")
-    SQLDataclass.metadata.create_all(engine)
+    # Per-table create avoids picking up unrelated ARRAY columns from sibling
+    # tests that share SQLDataclass.metadata (SQLite can't compile ARRAY).
+    WithHash.__table__.create(engine, checkfirst=True)
     SQLDataclass.bind(engine)
     yield engine
     _model._BOUND_ENGINE = None
