@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 import types
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
@@ -579,6 +580,10 @@ def _build_table(  # noqa: PLR0913  # internal builder, clarity over arg count
     columns: list[Column[Any]] = []
     for field_name, type_hint in resolved_hints.items():
         if field_name in relationship_fields:
+            continue
+        # ClassVar[X] annotations declare class-level constants, not instance
+        # fields. Skip them — they have no place on the SA table.
+        if get_origin(type_hint) is ClassVar:
             continue
         default_val = namespace.get(field_name)
         sa_info: SAColumnInfo | None = None
@@ -1175,7 +1180,7 @@ class SQLDataclassMeta(type):
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
-        versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
+        versioned: bool | ContextVar[bool] = False,  # noqa: FBT001, FBT002  # accepts bool flag or explicit ContextVar
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -1244,13 +1249,21 @@ class SQLDataclassMeta(type):
             _BUILDING.discard(qualname)
 
 
-def _make_migration_validator(ArgsKwargs: type) -> classmethod:  # type: ignore[type-arg]  # pydantic internal type, no public generic param
-    """Create a pydantic before-validator for versioned dataclass migration."""
+def _make_migration_validator(
+    ArgsKwargs: type,  # pydantic-internal type, no public generic param
+    migration_cv: ContextVar[bool],
+) -> classmethod:  # type: ignore[type-arg]  # pydantic decorator-typing is imprecise
+    """Create a pydantic before-validator for versioned dataclass migration.
+
+    The validator reads ``migration_cv`` — the class's bound migration
+    contextvar (either SD's built-in or a user-supplied one). When the
+    contextvar is True, the incoming dict is run through ``cls.migrate()``.
+    """
     from pydantic import model_validator
 
     def _validator_fn(cls: type, obj: Any) -> Any:
         obj = obj.kwargs or {} if isinstance(obj, ArgsKwargs) else obj  # type: ignore[attr-defined]  # ArgsKwargs.kwargs exists at runtime
-        if __DO_MIGRATION__.get():
+        if migration_cv.get():
             return do_migration(obj, cls)
         return obj
 
@@ -1669,7 +1682,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     namespace: dict[str, Any],
     *,
     table: bool,
-    versioned: bool = False,
+    versioned: bool | ContextVar[bool] = False,
     **kwargs: Any,
 ) -> Any:
     """Core logic for building a SQLDataclass (called from metaclass __new__)."""
@@ -1719,11 +1732,29 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         # Resolve relationships (needs resolved type hints)
         resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
+    # Resolve the migration contextvar:
+    # - False  → no versioning.
+    # - True   → use SD's built-in __DO_MIGRATION__.
+    # - ContextVar → use the caller-supplied one (bridges with external systems).
+    if isinstance(versioned, ContextVar):
+        migration_cv: ContextVar[bool] | None = versioned
+        is_versioned = True
+    elif versioned:
+        migration_cv = __DO_MIGRATION__
+        is_versioned = True
+    else:
+        migration_cv = None
+        is_versioned = False
+
     # Versioned models: inject a before-validator for migration
-    if versioned:
+    if is_versioned:
         from pydantic_core import ArgsKwargs
 
-        namespace["__validator_migration"] = _make_migration_validator(ArgsKwargs)
+        assert migration_cv is not None  # is_versioned ⇒ migration_cv is set
+        namespace["__validator_migration"] = _make_migration_validator(
+            ArgsKwargs,
+            migration_cv,
+        )
 
     # Create the actual class via the metaclass (keeps SQLDataclass in bases)
     cls: Any = type.__new__(mcs, name, bases, namespace, **kwargs)
@@ -1733,7 +1764,8 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
 
     # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
-    dc_cls.__versioned__ = versioned
+    dc_cls.__versioned__ = is_versioned
+    dc_cls.__migration_contextvar__ = migration_cv
     dc_cls.__relationships__ = resolved_rels
     dc_cls.__non_column_fields__ = frozenset(non_column_fields)
     if sa_table is not None:
@@ -2266,25 +2298,47 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         """Create an instance from a dict (e.g. JSON-deserialized data).
 
         For versioned models, this triggers migration if the data has an
-        older schema version (or no version key at all).
+        older schema version (or no version key at all). The contextvar
+        toggled here is the one bound at class-construction time
+        (``cls.__migration_contextvar__``) — either SD's built-in
+        ``__DO_MIGRATION__`` or a user-supplied ``ContextVar[bool]``.
         """
-        if getattr(cls, "__versioned__", False):
-            token = __DO_MIGRATION__.set(True)
+        migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)
+        if migration_cv is not None:
+            token = migration_cv.set(True)
             try:
                 return cls(**data)
             finally:
-                __DO_MIGRATION__.reset(token)
+                migration_cv.reset(token)
         return cls(**data)
 
     def dump(self) -> dict[str, Any]:
         """Serialize to a dict suitable for JSON.
 
-        Excludes relationship fields and ``column=False`` fields.
+        Excludes relationship fields and ``column=False`` fields — *except*
+        the version field on versioned models, which is always preserved so
+        a dump/load round-trip can correctly identify the schema version
+        (and skip migration when the data is already current).
+
+        Subclassing note:
+            SQLDataclass uses pydantic dataclasses with ``slots=True``, which
+            (per CPython issue #96249) is incompatible with ``super()``.
+            If you override ``dump()`` and need to call the base implementation,
+            invoke it explicitly: ``SQLDataclass.dump(self)`` — not
+            ``super().dump()`` (which raises ``TypeError: __class__ set to ...``
+            at class construction time).
         """
-        non_col: frozenset[str] = getattr(type(self), "__non_column_fields__", frozenset())
-        rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
+        cls = type(self)
+        non_col: frozenset[str] = getattr(cls, "__non_column_fields__", frozenset())
+        rel_keys: set[str] = set(getattr(cls, "__relationships__", {}))
         exclude = non_col | rel_keys
-        result: dict[str, Any] = TypeAdapter(type(self)).dump_python(
+        if getattr(cls, "__versioned__", False):
+            # Keep the version field in the dump so round-tripping versioned
+            # blobs preserves the schema version explicitly. do_migration
+            # treats a missing version as "oldest" and runs the full chain;
+            # without this carve-out, fresh dumps would be misclassified.
+            exclude = exclude - {cls.get_version_field_name()}
+        result: dict[str, Any] = TypeAdapter(cls).dump_python(
             self,
             warnings="error",
             mode="json",

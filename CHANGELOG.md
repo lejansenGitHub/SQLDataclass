@@ -2,6 +2,39 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.2.8] - 2026-05-29
+
+### Fixed
+- **`dump()` preserves the version field on versioned models** (B2). The field
+  is no longer excluded when its `column=False`, so dump/load round-trips carry
+  the schema version explicitly. `do_migration` keeps its "missing = oldest"
+  semantics — legacy data without a version still triggers the full migration
+  chain.
+- **`ClassVar[X]` annotations no longer break table construction** (B3). The
+  type-to-column mapper now skips `ClassVar`-annotated fields, matching stdlib
+  dataclasses behavior.
+- **`super().dump()` constraint documented** (B4). Pydantic dataclasses with
+  `slots=True` are incompatible with `super()` calls per [CPython#96249](https://github.com/python/cpython/issues/96249).
+  The `dump()` docstring now points overriders at the working pattern:
+  `SQLDataclass.dump(self)` explicit base call.
+
+### Added
+- **`versioned=` accepts a `ContextVar[bool]`** (B1) to bridge SD's migration
+  validator with an external host system's contextvar:
+  ```python
+  from contextvars import ContextVar
+
+  HOST_DO_MIGRATION: ContextVar[bool] = ContextVar("HOST_DO_MIGRATION", default=False)
+
+  class Order(SQLDataclass, versioned=HOST_DO_MIGRATION):
+      ORDER_VERSION: int = Field(default=2)
+      ...
+  ```
+  `versioned=True` keeps using SD's built-in contextvar (backward compatible).
+  When a `ContextVar` is passed, `cls.load()` toggles that one — and host code
+  that already sets the same contextvar will trigger SD's `migrate()` on nested
+  SD instances correctly.
+
 ## [0.2.7] - 2026-05-29
 
 ### Fixed

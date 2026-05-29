@@ -16,6 +16,7 @@ Pure data model (no table)::
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
@@ -75,7 +76,12 @@ class SQLModel(pydantic.BaseModel):
 
     metadata: ClassVar[MetaData] = MetaData()
 
-    def __init_subclass__(cls, table: bool = False, versioned: bool = False, **kwargs: Any) -> None:  # noqa: FBT001, FBT002  # bool flag required by class keyword syntax
+    def __init_subclass__(
+        cls,
+        table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by class keyword syntax
+        versioned: bool | ContextVar[bool] = False,  # noqa: FBT001, FBT002  # accepts bool flag or ContextVar
+        **kwargs: Any,
+    ) -> None:
         super().__init_subclass__(**kwargs)
 
         # Enforce no cross-inheritance with SQLDataclass
@@ -84,14 +90,29 @@ class SQLModel(pydantic.BaseModel):
                 msg = f"{cls.__name__} cannot inherit from both SQLModel and SQLDataclass. Use composition instead."
                 raise TypeError(msg)
 
+        # Resolve the migration contextvar:
+        # - False  → no versioning.
+        # - True   → SD's built-in __DO_MIGRATION__.
+        # - ContextVar → caller-supplied (bridges with external migration systems).
+        if isinstance(versioned, ContextVar):
+            migration_cv: ContextVar[bool] | None = versioned
+            is_versioned = True
+        elif versioned:
+            migration_cv = __DO_MIGRATION__
+            is_versioned = True
+        else:
+            migration_cv = None
+            is_versioned = False
+
         # Store the table flag for __pydantic_init_subclass__ to use later
         cls.__sqlmodel_is_basemodel__ = True
         cls.__sqldataclass_is_table__ = table
-        cls.__versioned__ = versioned
+        cls.__versioned__ = is_versioned
+        cls.__migration_contextvar__ = migration_cv  # type: ignore[attr-defined]  # set dynamically on subclasses
         cls.__relationships__ = {}
         cls.__non_column_fields__ = frozenset()
         cls._sqlmodel_pending_table__ = table  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
-        cls._sqlmodel_pending_versioned__ = versioned  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
+        cls._sqlmodel_pending_versioned__ = is_versioned  # type: ignore[attr-defined]  # pending flags consumed by __pydantic_init_subclass__
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:
@@ -183,7 +204,8 @@ class SQLModel(pydantic.BaseModel):
     @model_validator(mode="before")
     @classmethod
     def __validator_migration(cls, obj: dict[str, Any]) -> dict[str, Any]:
-        if getattr(cls, "__versioned__", False) and __DO_MIGRATION__.get():
+        migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)
+        if migration_cv is not None and migration_cv.get():
             return do_migration(obj, cls)
         return obj
 
@@ -192,24 +214,33 @@ class SQLModel(pydantic.BaseModel):
         """Create an instance from a dict (e.g. JSON-deserialized data).
 
         For versioned models, this triggers migration if the data has an
-        older schema version (or no version key at all).
+        older schema version (or no version key at all). The contextvar
+        toggled here is the one bound at class-construction time
+        (``cls.__migration_contextvar__``) — either SD's built-in or a
+        user-supplied ``ContextVar[bool]``.
         """
-        if getattr(cls, "__versioned__", False):
-            token = __DO_MIGRATION__.set(True)
+        migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)
+        if migration_cv is not None:
+            token = migration_cv.set(True)
             try:
                 return cls(**data)
             finally:
-                __DO_MIGRATION__.reset(token)
+                migration_cv.reset(token)
         return cls(**data)
 
     def dump(self) -> dict[str, Any]:
         """Serialize to a dict suitable for JSON.
 
-        Excludes relationship fields and ``column=False`` fields.
+        Excludes relationship fields and ``column=False`` fields — *except*
+        the version field on versioned models, which is always preserved so
+        a dump/load round-trip preserves the schema version.
         """
-        non_col: frozenset[str] = getattr(type(self), "__non_column_fields__", frozenset())
-        rel_keys: set[str] = set(getattr(type(self), "__relationships__", {}))
+        cls = type(self)
+        non_col: frozenset[str] = getattr(cls, "__non_column_fields__", frozenset())
+        rel_keys: set[str] = set(getattr(cls, "__relationships__", {}))
         exclude = non_col | rel_keys
+        if getattr(cls, "__versioned__", False):
+            exclude = exclude - {cls.get_version_field_name()}
         result = self.model_dump(warnings="error", by_alias=True, mode="json")
         if exclude:
             for key in exclude:
