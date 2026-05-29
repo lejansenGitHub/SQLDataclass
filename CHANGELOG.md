@@ -2,6 +2,64 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.3.0] - 2026-05-29
+
+### Added — polymorphic FK across N columns (#5)
+
+- **`Relationship(discriminator="...", polymorphic_fks={...})`** — first-class
+  support for N:1 polymorphic reference across independent catalog tables. A
+  parent table holds one FK column per variant and a discriminator column that
+  selects which variant is active.
+
+  ```python
+  from typing import Union
+
+  class Line(SQLDataclass, table=True):
+      id: int | None = Field(default=None, primary_key=True)
+      line_category: str                                # discriminator column
+      line_type_id: int | None = Field(
+          default=None, foreign_key="line_types.id",
+      )
+      line_asym_type_id: int | None = Field(
+          default=None, foreign_key="line_asym_types.id",
+      )
+      line_type: LineType | LineAsymType | None = Relationship(
+          discriminator="line_category",
+          polymorphic_fks={
+              "SYMMETRIC":  ("line_type_id",      LineType),
+              "ASYMMETRIC": ("line_asym_type_id", LineAsymType),
+          },
+      )
+  ```
+
+  **Read path:** a single SELECT with one LEFT JOIN per variant table; the
+  row's discriminator picks the active variant for hydration. Unknown or
+  missing-FK discriminator values yield `variant=None` (no crash).
+
+  **Write path:** `instance.insert()` routes the related object's PK into the
+  FK column matching the discriminator and nulls every other polymorphic FK.
+  Mismatched relationship type or unknown discriminator value raises
+  `ValueError`.
+
+  **Validation at class construction:**
+  - `polymorphic_fks` without `discriminator` raises `TypeError`.
+  - A local FK column named in `polymorphic_fks` that isn't declared on the
+    model raises `TypeError`.
+
+  This is a different shape from the existing shared-PK
+  `Relationship(discriminator="...")` pattern: that one models *ownership*
+  (variant.id IS parent.id, 1:1), this one models *polymorphic reference*
+  (parent.fk_X = variant.id, N:1; variants have their own PKs and lifecycles).
+  Both forms coexist; SD chooses based on whether `polymorphic_fks=` is set.
+
+### Changed
+
+- **#4 — declarative JOIN hydration: closed as won't-fix.** The existing
+  pattern (`Relationship()` + `@model_validator(mode="after")` copying the
+  joined attr into a flat field) covers the use case in ~5 lines per model.
+  Can be revisited if a real codebase accumulates enough copies for the
+  boilerplate to hurt.
+
 ## [0.2.10] - 2026-05-29
 
 ### Added — Phase B ergonomic features
