@@ -262,6 +262,12 @@ class RelationshipInfo:
     ``{relationship_name}_id``; the named local column is used as the join source.
     Note: this is the *local* column name on the parent model, not the
     ``target_table.target_col`` string used by ``Field(foreign_key=...)``.
+
+    ``polymorphic_fks`` (dict) — for N:1 polymorphic reference across several
+    independent catalog tables. Maps each discriminator value to a
+    ``(local_fk_column, target_class)`` tuple. Each target gets its own
+    LEFT JOIN via the matching local FK; the row's discriminator selects
+    which variant is hydrated. Requires ``discriminator`` to also be set.
     """
 
     discriminator: str | None = None
@@ -269,6 +275,7 @@ class RelationshipInfo:
     link_model: Any = None
     order_by: str | None = None
     foreign_key: str | None = None
+    polymorphic_fks: dict[Any, tuple[str, Any]] | None = None
 
 
 def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
@@ -380,6 +387,7 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
     discriminator: str | None = None,
     order_by: str | None = None,
     foreign_key: str | None = None,
+    polymorphic_fks: dict[Any, tuple[str, Any]] | None = None,
 ) -> Any:
     """Mark a field as a relationship — not stored as a database column.
 
@@ -411,6 +419,28 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
     The ``foreign_key`` here names the *local* column on this model (the
     column that already declares ``Field(foreign_key=...)`` pointing at the
     target). It suppresses the default auto-injection of ``{name}_id``.
+
+    Polymorphic reference (N:1 across catalog tables)::
+
+        class Line(SQLDataclass, table=True):
+            line_id: int = Field(primary_key=True)
+            line_category: LineCategory                      # discriminator on parent
+            line_type_id: int | None = Field(
+                default=None, foreign_key="line_types.id",
+            )
+            line_asym_type_id: int | None = Field(
+                default=None, foreign_key="line_asym_types.id",
+            )
+            line_type: LineType | LineAsymType = Relationship(
+                discriminator="line_category",
+                polymorphic_fks={
+                    LineCategory.SYMMETRIC:  ("line_type_id",      LineType),
+                    LineCategory.ASYMMETRIC: ("line_asym_type_id", LineAsymType),
+                },
+            )
+
+    Each target is reached via its own LEFT JOIN through the named local FK
+    column; the row's discriminator selects which variant is hydrated.
     """
     rel_info = RelationshipInfo(
         discriminator=discriminator,
@@ -418,13 +448,14 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
         link_model=link_model,
         order_by=order_by,
         foreign_key=foreign_key,
+        polymorphic_fks=polymorphic_fks,
     )
 
     pydantic_kwargs: dict[str, Any] = {}
     if default is not _UNSET:
         pydantic_kwargs["default"] = default
-    elif discriminator is not None:
-        pass  # required field for discriminated unions
+    elif discriminator is not None and polymorphic_fks is None:
+        pass  # shared-PK discriminated unions are always materialized; field is required
     else:
         # Default: None for scalar, list factory for collections.
         # The actual default_factory for list[] types is set here;
@@ -492,7 +523,7 @@ def _build_sa_column(
     return Column(*col_args, **col_kwargs)
 
 
-def _inject_implicit_fk_fields(
+def _inject_implicit_fk_fields(  # noqa: PLR0912  # branches scale with relationship variants
     resolved_hints: dict[str, Any],
     namespace: dict[str, Any],
     annotations: dict[str, Any],
@@ -523,6 +554,19 @@ def _inject_implicit_fk_fields(
                     "be declared via Field(foreign_key='target.column')."
                 )
                 raise TypeError(msg)
+            continue
+
+        # Polymorphic-FK relationships use their own per-variant FK columns
+        # declared explicitly on the model; never auto-inject {name}_id.
+        if rel_info is not None and rel_info.polymorphic_fks is not None:
+            for local_fk_name, _target_cls in rel_info.polymorphic_fks.values():
+                if local_fk_name not in resolved_hints and local_fk_name not in annotations:
+                    msg = (
+                        f"Relationship {field_name!r} polymorphic_fks names "
+                        f"local column {local_fk_name!r} which is not declared "
+                        "on the model. Add a Field(foreign_key='...') for it."
+                    )
+                    raise TypeError(msg)
             continue
 
         fk_field_name = f"{field_name}_id"
@@ -624,10 +668,12 @@ class _ResolvedRelationship:
     target_types: list[Any]  # [Team] for many-to-one, [NormalData, BatteryData] for union
     discriminator: str | None
     is_optional: bool
-    kind: str  # "many_to_one", "one_to_many", "many_to_many", "discriminated"
+    kind: str  # "many_to_one", "one_to_many", "many_to_many", "discriminated", "polymorphic_fk"
     back_populates: str | None = None
     link_model: Any = None
     order_by: str | None = None
+    # For "polymorphic_fk" kind: {discriminator_value: (local_fk_column, target_class)}
+    polymorphic_fks: dict[Any, tuple[str, Any]] | None = None
 
 
 def _resolve_relationships(
@@ -649,8 +695,20 @@ def _resolve_relationships(
 
         inner, is_optional = _unwrap_optional(type_hint)
 
-        # Detect kind from type hint
-        if rel_info.discriminator:
+        # Detect kind from type hint and metadata
+        if rel_info.polymorphic_fks is not None:
+            # N:1 polymorphic reference — independent catalog tables joined
+            # via per-variant FK columns on the parent.
+            if rel_info.discriminator is None:
+                msg = (
+                    f"Relationship {field_name!r} sets polymorphic_fks but no "
+                    "discriminator. polymorphic_fks requires a discriminator "
+                    "column to select the active variant."
+                )
+                raise TypeError(msg)
+            kind = "polymorphic_fk"
+            target_types = [target_cls for (_, target_cls) in rel_info.polymorphic_fks.values()]
+        elif rel_info.discriminator:
             kind = "discriminated"
             variants = _unwrap_union_variants(inner)
             target_types = variants
@@ -668,11 +726,12 @@ def _resolve_relationships(
             field_name=field_name,
             target_types=target_types,
             discriminator=rel_info.discriminator,
-            is_optional=is_optional or kind == "many_to_one",
+            is_optional=is_optional or kind in ("many_to_one", "polymorphic_fk"),
             kind=kind,
             back_populates=rel_info.back_populates,
             link_model=rel_info.link_model,
             order_by=rel_info.order_by,
+            polymorphic_fks=rel_info.polymorphic_fks,
         )
     return rels
 
@@ -692,8 +751,8 @@ def _find_fk_join_condition(source_table: Table, target_table: Table) -> Any | N
 
 
 def _has_join_relationships(relationships: dict[str, _ResolvedRelationship]) -> bool:
-    """Check if any relationships require JOINs (many-to-one or discriminated)."""
-    return any(rel.kind in ("many_to_one", "discriminated") for rel in relationships.values())
+    """Check if any relationships require JOINs (many-to-one, discriminated, or polymorphic-FK)."""
+    return any(rel.kind in ("many_to_one", "discriminated", "polymorphic_fk") for rel in relationships.values())
 
 
 def _build_jti_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
@@ -728,7 +787,7 @@ def _build_jti_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
     return query
 
 
-def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:
+def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> Any:  # noqa: PLR0912  # branches scale with relationship kinds
     """Build a SELECT with labeled columns and JOINs for scalar relationships.
 
     Collection relationships (one-to-many, many-to-many) are loaded via
@@ -740,15 +799,31 @@ def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> An
     # Label base table columns with prefix to avoid name collisions
     labeled: list[Any] = [c.label(f"__base__{c.name}") for c in base_table.columns]
 
-    # Build join chain — only for scalar relationships (many-to-one, discriminated)
+    # Build join chain — only for scalar relationships (many-to-one, discriminated,
+    # polymorphic-FK).
     base_from: Any = base_table
     for field_name, rel in relationships.items():
         if rel.kind in ("one_to_many", "many_to_many"):
             continue  # loaded separately
+        if rel.kind == "polymorphic_fk":
+            # Each variant gets its own LEFT JOIN through its dedicated FK column.
+            assert rel.polymorphic_fks is not None  # kind invariant
+            for local_fk_name, target_cls in rel.polymorphic_fks.values():
+                if not hasattr(target_cls, "__table__"):
+                    continue
+                target_table: Table = target_cls.__table__
+                prefix = f"__{field_name}__{target_table.name}__"
+                labeled.extend(c.label(f"{prefix}{c.name}") for c in target_table.columns)
+                local_col = base_table.c[local_fk_name]
+                pk_cols = list(target_table.primary_key.columns)
+                if len(pk_cols) != 1:
+                    continue  # composite PKs unsupported here
+                base_from = base_from.outerjoin(target_table, local_col == pk_cols[0])
+            continue
         for target_type in rel.target_types:
             if not hasattr(target_type, "__table__"):
                 continue
-            target_table: Table = target_type.__table__
+            target_table = target_type.__table__
             prefix = f"__{field_name}__{target_table.name}__"
             labeled.extend(c.label(f"{prefix}{c.name}") for c in target_table.columns)
 
@@ -792,6 +867,33 @@ def _hydrate_discriminated(
     return _fast_construct(active_type, nested)
 
 
+def _hydrate_polymorphic_fk(
+    row_dict: dict[str, Any],
+    base_data: dict[str, Any],
+    rel: _ResolvedRelationship,
+) -> Any:
+    """Hydrate a polymorphic-FK relationship: pick the active variant via the
+    discriminator value, then construct it from the row's prefixed columns."""
+    assert rel.polymorphic_fks is not None  # kind invariant
+    assert rel.discriminator is not None  # kind invariant
+    disc_value = base_data.get(rel.discriminator)
+    entry = rel.polymorphic_fks.get(disc_value)
+    if entry is None:
+        return None
+    _local_fk, target_cls = entry
+    if not hasattr(target_cls, "__table__"):
+        return None
+    target_table: Table = target_cls.__table__
+    prefix = f"__{rel.field_name}__{target_table.name}__"
+    nested = _extract_prefixed(row_dict, prefix)
+    # If the LEFT JOIN had no match (FK was NULL or pointed to a missing row),
+    # all variant columns will be NULL — distinguish by checking the variant PK.
+    pk_cols = list(target_table.primary_key.columns)
+    if pk_cols and nested.get(pk_cols[0].name) is None:
+        return None
+    return _fast_construct(target_cls, nested)
+
+
 def _find_active_variant(variants: list[Any], discriminator: str, disc_value: Any) -> Any:
     """Find which union variant matches the discriminator value."""
     for variant in variants:
@@ -828,6 +930,8 @@ def _hydrate_row(cls: Any, row: Any) -> Any:
             base_data[field_name] = []  # placeholder, populated later
         elif rel.kind == "discriminated":
             base_data[field_name] = _hydrate_discriminated(row_dict, base_data, rel)
+        elif rel.kind == "polymorphic_fk":
+            base_data[field_name] = _hydrate_polymorphic_fk(row_dict, base_data, rel)
         else:
             base_data[field_name] = _hydrate_many_to_one(row_dict, rel)
 
@@ -1918,48 +2022,105 @@ def _apply_discriminator_on_insert(klass: Any, flat: dict[str, Any]) -> dict[str
 
 
 def _insert_relationships(instance: Any, conn: Connection) -> None:
-    """Cascade-insert many-to-one relationships before the parent INSERT.
+    """Cascade-insert many-to-one and polymorphic-FK relationships before the parent INSERT.
 
     For each many-to-one relationship field that holds a non-None value whose
     PK is not yet set, insert the related object and copy its PK into the
-    FK column on the parent instance.
+    FK column on the parent instance. Polymorphic-FK relationships use the
+    instance's discriminator to choose which local FK column to populate; the
+    other FK columns in the polymorphic_fks mapping are nulled out.
     """
     rels: dict[str, _ResolvedRelationship] = getattr(type(instance), "__relationships__", {})
     fk_map: dict[str, Column[Any]] = getattr(type(instance), "__fk_map__", {})
 
     for rel in rels.values():
-        if rel.kind != "many_to_one":
-            continue
+        if rel.kind == "many_to_one":
+            _insert_many_to_one_relationship(instance, rel, fk_map, conn)
+        elif rel.kind == "polymorphic_fk":
+            _insert_polymorphic_fk_relationship(instance, rel, conn)
 
-        related = getattr(instance, rel.field_name, None)
-        if related is None:
-            continue
 
-        # Check if the related object needs inserting (PK is None)
-        target_table = getattr(type(related), "__table__", None)
-        if target_table is None:
-            continue
-        pk_cols = [col.name for col in target_table.primary_key.columns]
-        if len(pk_cols) != 1:
-            continue
-        pk_name = pk_cols[0]
+def _insert_many_to_one_relationship(
+    instance: Any,
+    rel: _ResolvedRelationship,
+    fk_map: dict[str, Column[Any]],
+    conn: Connection,
+) -> None:
+    related = getattr(instance, rel.field_name, None)
+    if related is None:
+        return
 
-        pk_value = getattr(related, pk_name, None)
-        if pk_value is not None:
-            # Already persisted — just ensure the FK is set
-            fk_col = fk_map.get(target_table.name)
-            if fk_col is not None:
-                object.__setattr__(instance, fk_col.name, pk_value)
-            continue
+    target_table = getattr(type(related), "__table__", None)
+    if target_table is None:
+        return
+    pk_cols = [col.name for col in target_table.primary_key.columns]
+    if len(pk_cols) != 1:
+        return
+    pk_name = pk_cols[0]
 
-        # Recursively insert the related object (handles nested relationships)
+    pk_value = getattr(related, pk_name, None)
+    if pk_value is None:
         related.insert(conn)
-
-        # Copy the generated PK into the FK field
         pk_value = getattr(related, pk_name)
-        fk_col = fk_map.get(target_table.name)
-        if fk_col is not None:
-            object.__setattr__(instance, fk_col.name, pk_value)
+    fk_col = fk_map.get(target_table.name)
+    if fk_col is not None:
+        object.__setattr__(instance, fk_col.name, pk_value)
+
+
+def _insert_polymorphic_fk_relationship(
+    instance: Any,
+    rel: _ResolvedRelationship,
+    conn: Connection,
+) -> None:
+    """Insert/link the polymorphic-FK relationship for *instance*.
+
+    Routes the related object's PK into the local FK column matching the
+    instance's discriminator value, and nulls every other local FK in the
+    polymorphic_fks mapping. Raises ``ValueError`` if the relationship value's
+    type doesn't match the discriminator (typed mismatch is always a caller bug).
+    """
+    assert rel.polymorphic_fks is not None  # kind invariant
+    assert rel.discriminator is not None  # kind invariant
+
+    disc_value = getattr(instance, rel.discriminator, None)
+    related = getattr(instance, rel.field_name, None)
+
+    if related is None:
+        # No variant attached — leave the FK columns as the caller set them.
+        return
+
+    # Variant attached — null the inactive FKs, then populate the active one.
+    fk_columns = {local_fk for (local_fk, _) in rel.polymorphic_fks.values()}
+    for local_fk in fk_columns:
+        object.__setattr__(instance, local_fk, None)
+
+    entry = rel.polymorphic_fks.get(disc_value)
+    if entry is None:
+        msg = (
+            f"{type(instance).__name__}.{rel.field_name}: discriminator "
+            f"{rel.discriminator}={disc_value!r} has no entry in polymorphic_fks. "
+            f"Known values: {sorted(map(repr, rel.polymorphic_fks))}."
+        )
+        raise ValueError(msg)
+    local_fk_name, target_cls = entry
+    if not isinstance(related, target_cls):
+        msg = (
+            f"{type(instance).__name__}.{rel.field_name}: discriminator "
+            f"{rel.discriminator}={disc_value!r} expects {target_cls.__name__}, "
+            f"got {type(related).__name__}."
+        )
+        raise ValueError(msg)
+
+    target_table = type(related).__table__
+    pk_cols = [col.name for col in target_table.primary_key.columns]
+    if len(pk_cols) != 1:
+        return  # composite PKs unsupported
+    pk_name = pk_cols[0]
+    pk_value = getattr(related, pk_name, None)
+    if pk_value is None:
+        related.insert(conn)
+        pk_value = getattr(related, pk_name)
+    object.__setattr__(instance, local_fk_name, pk_value)
 
 
 def _server_default_columns(sa_table: Table) -> frozenset[str]:
