@@ -807,18 +807,27 @@ def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> An
             continue  # loaded separately
         if rel.kind == "polymorphic_fk":
             # Each variant gets its own LEFT JOIN through its dedicated FK column.
+            # Use a per-entry SA alias so two entries can point at the same target
+            # table (e.g. {"primary": ("primary_id", Tag), "backup": ("backup_id", Tag)})
+            # without an "ambiguous column" error at compile time. Label prefixes
+            # use the *local FK column* so they remain unique even when target tables collide.
             assert rel.polymorphic_fks is not None  # kind invariant
             for local_fk_name, target_cls in rel.polymorphic_fks.values():
                 if not hasattr(target_cls, "__table__"):
                     continue
-                target_table: Table = target_cls.__table__
-                prefix = f"__{field_name}__{target_table.name}__"
-                labeled.extend(c.label(f"{prefix}{c.name}") for c in target_table.columns)
-                local_col = base_table.c[local_fk_name]
-                pk_cols = list(target_table.primary_key.columns)
-                if len(pk_cols) != 1:
+                target_table = target_cls.__table__
+                target_pk_cols = list(target_table.primary_key.columns)
+                if len(target_pk_cols) != 1:
                     continue  # composite PKs unsupported here
-                base_from = base_from.outerjoin(target_table, local_col == pk_cols[0])
+                pk_name = target_pk_cols[0].name
+                target_alias = target_table.alias(f"{field_name}__{local_fk_name}")
+                prefix = f"__{field_name}__{local_fk_name}__"
+                labeled.extend(c.label(f"{prefix}{c.name}") for c in target_alias.columns)
+                local_col = base_table.c[local_fk_name]
+                base_from = base_from.outerjoin(
+                    target_alias,
+                    local_col == target_alias.c[pk_name],
+                )
             continue
         for target_type in rel.target_types:
             if not hasattr(target_type, "__table__"):
@@ -880,11 +889,14 @@ def _hydrate_polymorphic_fk(
     entry = rel.polymorphic_fks.get(disc_value)
     if entry is None:
         return None
-    _local_fk, target_cls = entry
+    local_fk, target_cls = entry
     if not hasattr(target_cls, "__table__"):
         return None
     target_table: Table = target_cls.__table__
-    prefix = f"__{rel.field_name}__{target_table.name}__"
+    # Prefix is keyed by the local FK column (not the target table name) to
+    # disambiguate same-target entries (e.g. primary_tag_id + backup_tag_id
+    # both pointing at Tag).
+    prefix = f"__{rel.field_name}__{local_fk}__"
     nested = _extract_prefixed(row_dict, prefix)
     # If the LEFT JOIN had no match (FK was NULL or pointed to a missing row),
     # all variant columns will be NULL — distinguish by checking the variant PK.
@@ -1365,7 +1377,7 @@ def _make_migration_validator(
     """Create a pydantic before-validator for versioned dataclass migration.
 
     The validator reads ``migration_cv`` — the class's bound migration
-    contextvar (either SD's built-in or a user-supplied one). When the
+    contextvar (either SQLDataclass's built-in or a user-supplied one). When the
     contextvar is True, the incoming dict is run through ``cls.migrate()``.
     """
     from pydantic import model_validator
@@ -1869,9 +1881,9 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
         resolved_rels = _resolve_relationships(temp_for_hints, resolved, namespace)
 
     # Resolve the migration contextvar for versioned models. The class may
-    # override SD's built-in by declaring ``__migration_contextvar__`` at
+    # override SQLDataclass's built-in by declaring ``__migration_contextvar__`` at
     # class-body scope (alongside ``__tablename__``, ``__table_args__``);
-    # otherwise SD's ``__DO_MIGRATION__`` is used.
+    # otherwise SQLDataclass's ``__DO_MIGRATION__`` is used.
     migration_cv: ContextVar[bool] | None = None
     if versioned:
         override = namespace.get("__migration_contextvar__")
@@ -2491,6 +2503,18 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
                     "cannot be written from Python."
                 )
                 raise ValueError(msg)
+        relationship_fields: set[str] = set(getattr(klass, "__relationships__", {}))
+        if relationship_fields:
+            attempted_rels = set(values) & relationship_fields
+            if attempted_rels:
+                msg = (
+                    f"{klass.__name__}.update() does not support relationship "
+                    f"keys (got {sorted(attempted_rels)}). Update the underlying "
+                    "FK column(s) and discriminator (if any) directly, or fetch "
+                    "an instance and reassign the relationship attribute followed "
+                    "by insert/save."
+                )
+                raise ValueError(msg)
         where = _apply_discriminator_filter(klass, where)
         where = _apply_default_where(klass, where, apply_default_where)
         if conn is None:
@@ -2593,7 +2617,7 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         For versioned models, this triggers migration if the data has an
         older schema version (or no version key at all). The contextvar
         toggled here is the one bound at class-construction time
-        (``cls.__migration_contextvar__``) — either SD's built-in
+        (``cls.__migration_contextvar__``) — either SQLDataclass's built-in
         ``__DO_MIGRATION__`` or a user-supplied ``ContextVar[bool]``.
         """
         migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)

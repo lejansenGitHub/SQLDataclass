@@ -41,7 +41,7 @@ def from_psycopg(psycopg_conn_or_cursor: Any) -> SAConnection:
     The returned SA Connection shares the same underlying psycopg connection
     — and therefore the same transaction — as the original object. Reads via
     the returned SAConnection see uncommitted writes made through the caller's
-    cursor, and SD will neither commit nor roll back the underlying connection
+    cursor, and SQLDataclass will neither commit nor roll back the underlying connection
     on the caller's behalf. The caller owns the connection lifecycle; closing
     the SA Connection does **not** close the underlying psycopg connection.
 

@@ -91,8 +91,8 @@ class SQLModel(pydantic.BaseModel):
                 raise TypeError(msg)
 
         # Resolve the migration contextvar for versioned models. The class may
-        # override SD's built-in by declaring ``__migration_contextvar__``
-        # in its class body; otherwise SD's ``__DO_MIGRATION__`` is used.
+        # override SQLDataclass's built-in by declaring ``__migration_contextvar__``
+        # in its class body; otherwise SQLDataclass's ``__DO_MIGRATION__`` is used.
         migration_cv: ContextVar[bool] | None = None
         if versioned:
             override = cls.__dict__.get("__migration_contextvar__")
@@ -216,7 +216,7 @@ class SQLModel(pydantic.BaseModel):
         For versioned models, this triggers migration if the data has an
         older schema version (or no version key at all). The contextvar
         toggled here is the one bound at class-construction time
-        (``cls.__migration_contextvar__``) — either SD's built-in or a
+        (``cls.__migration_contextvar__``) — either SQLDataclass's built-in or a
         user-supplied ``ContextVar[bool]``.
         """
         migration_cv: ContextVar[bool] | None = getattr(cls, "__migration_contextvar__", None)
