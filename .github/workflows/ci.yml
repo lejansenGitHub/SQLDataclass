@@ -39,6 +39,11 @@ jobs:
       - run: pytest tests/ -m "not integration and not performance" --cov=sqldataclass --cov-report=xml -x -v
       - uses: actions/upload-artifact@v4
         if: always()
+        # actions/upload-artifact@v4 intermittently fails FinalizeArtifact with
+        # ECONNRESET (see actions/upload-artifact#560). The coverage report is
+        # consumed by diff-cover downstream but not a gating signal for merge —
+        # if it fails to upload we'd rather not fail the test job.
+        continue-on-error: true
         with:
           name: coverage-xml
           path: coverage.xml

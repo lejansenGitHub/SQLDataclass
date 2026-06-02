@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from dataclasses import fields as dc_fields
 from datetime import date, datetime, time
 from decimal import Decimal
+from enum import StrEnum
 from functools import lru_cache
 from typing import (
     TYPE_CHECKING,
@@ -108,6 +109,24 @@ from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import upsert_row_returning as _upsert_row_returning
 
 _T = TypeVar("_T")
+
+
+class JoinType(StrEnum):
+    """Join semantics for ``Relationship``-driven hydration.
+
+    ``OUTER`` (the default) emits ``LEFT OUTER JOIN`` — rows are returned even
+    when the FK is null or the target row is missing. Optional relationships
+    (``Foo | None = Relationship()``) should keep this default.
+
+    ``INNER`` emits ``INNER JOIN`` — the parent row is excluded when the FK has
+    no match in the target table. Use for many-to-one with a NOT NULL FK column
+    plus an enforced FK constraint, when callers want a row's presence to imply
+    the variant's presence.
+    """
+
+    OUTER = "outer"
+    INNER = "inner"
+
 
 _DATACLASS_CONFIG = ConfigDict(
     allow_inf_nan=False,
@@ -276,6 +295,7 @@ class RelationshipInfo:
     order_by: str | None = None
     foreign_key: str | None = None
     polymorphic_fks: dict[Any, tuple[str, Any]] | None = None
+    join_type: JoinType = JoinType.OUTER
 
 
 def _get_rel_info(field_info: FieldInfo) -> RelationshipInfo | None:
@@ -388,6 +408,7 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
     order_by: str | None = None,
     foreign_key: str | None = None,
     polymorphic_fks: dict[Any, tuple[str, Any]] | None = None,
+    join_type: JoinType = JoinType.OUTER,
 ) -> Any:
     """Mark a field as a relationship — not stored as a database column.
 
@@ -442,6 +463,9 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
     Each target is reached via its own LEFT JOIN through the named local FK
     column; the row's discriminator selects which variant is hydrated.
     """
+    if not isinstance(join_type, JoinType):
+        msg = f"Relationship join_type must be a JoinType, got {type(join_type).__name__}"
+        raise TypeError(msg)
     rel_info = RelationshipInfo(
         discriminator=discriminator,
         back_populates=back_populates,
@@ -449,6 +473,7 @@ def Relationship(  # noqa: PLR0913  # documented kwargs surface
         order_by=order_by,
         foreign_key=foreign_key,
         polymorphic_fks=polymorphic_fks,
+        join_type=join_type,
     )
 
     pydantic_kwargs: dict[str, Any] = {}
@@ -674,6 +699,9 @@ class _ResolvedRelationship:
     order_by: str | None = None
     # For "polymorphic_fk" kind: {discriminator_value: (local_fk_column, target_class)}
     polymorphic_fks: dict[Any, tuple[str, Any]] | None = None
+    # Many-to-one only: OUTER (default) or INNER. Polymorphic/discriminated
+    # variants always use OUTER because variants are mutually exclusive.
+    join_type: JoinType = JoinType.OUTER
 
 
 def _resolve_relationships(
@@ -732,6 +760,7 @@ def _resolve_relationships(
             link_model=rel_info.link_model,
             order_by=rel_info.order_by,
             polymorphic_fks=rel_info.polymorphic_fks,
+            join_type=rel_info.join_type,
         )
     return rels
 
@@ -838,7 +867,10 @@ def _build_joined_query(cls: Any, where: Any = None, order_by: Any = None) -> An
 
             join_cond = _find_fk_join_condition(base_table, target_table)
             if join_cond is not None:
-                base_from = base_from.outerjoin(target_table, join_cond)
+                if rel.join_type is JoinType.INNER:
+                    base_from = base_from.join(target_table, join_cond)
+                else:
+                    base_from = base_from.outerjoin(target_table, join_cond)
 
     query = sa_select(*labeled).select_from(base_from)
 

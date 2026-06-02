@@ -1,6 +1,6 @@
 """SQLDataclass — pydantic dataclass ORM with memory-efficient DB access."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 from sqldataclass.basemodel import SQLModel
 from sqldataclass.compat import from_psycopg
@@ -10,7 +10,7 @@ from sqldataclass.hydration import (
     format_discriminated,
     nest_fields,
 )
-from sqldataclass.model import Field, Relationship, SQLDataclass
+from sqldataclass.model import Field, JoinType, Relationship, SQLDataclass
 from sqldataclass.query import fetch_all, fetch_one, load_all, select_columns
 from sqldataclass.registry import (
     Base,
@@ -42,6 +42,7 @@ __all__ = [
     "DictReturnMany",
     "Field",
     "FillValueIfNone",
+    "JoinType",
     "ModelReturn",
     "ModelReturnMany",
     "NonNullDictReturn",
