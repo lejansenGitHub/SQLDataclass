@@ -2,6 +2,36 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.3.2] - 2026-06-02
+
+### Added
+
+- **`Relationship(join_type=JoinType.INNER)`** — many-to-one relationships
+  default to `LEFT OUTER JOIN` (so optional `Foo | None` relationships
+  return rows even when the FK is null or the target was deleted). Set
+  `join_type=JoinType.INNER` to emit `INNER JOIN` instead — rows whose FK
+  has no match in the target are excluded entirely. The new `JoinType`
+  enum is re-exported from the top-level package.
+
+  ```python
+  from sqldataclass import Field, JoinType, Relationship, SQLDataclass
+
+  class Cable(SQLDataclass, table=True):
+      id: int | None = Field(default=None, primary_key=True)
+      voltage_id: int = Field(foreign_key="voltage.id")
+      voltage: Voltage = Relationship(
+          foreign_key="voltage_id",
+          join_type=JoinType.INNER,
+      )
+  ```
+
+  Polymorphic-FK and discriminated-union variants always use `LEFT OUTER
+  JOIN` regardless of `join_type` — their semantics require it
+  (mutually-exclusive variants).
+
+  Validation: passing anything other than a `JoinType` value raises
+  `TypeError` at class construction.
+
 ## [0.3.1] - 2026-05-29
 
 ### Fixed
