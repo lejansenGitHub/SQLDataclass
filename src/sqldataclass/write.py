@@ -85,6 +85,37 @@ def upsert_row_returning(
                 object.__setattr__(instance, key, value)
 
 
+def insert_if_absent_returning(
+    conn: Connection,
+    table_class: type,
+    instance: Any,
+    values: dict[str, Any],
+    *,
+    conflict_columns: list[str],
+) -> bool:
+    """PostgreSQL ``INSERT ... ON CONFLICT DO NOTHING RETURNING *``.
+
+    Returns ``True`` if a row was inserted (and DB-generated columns are
+    hydrated onto *instance* in place via RETURNING), ``False`` if the
+    conflict suppressed the insert.
+    """
+    target_table = table(table_class)
+    stmt = (
+        pg_insert(target_table)
+        .values(values)
+        .on_conflict_do_nothing(index_elements=conflict_columns)
+        .returning(target_table)
+    )
+    result = conn.execute(stmt)
+    row = result.mappings().fetchone()
+    if row is None:
+        return False
+    for key, value in row.items():
+        if hasattr(instance, key):
+            object.__setattr__(instance, key, value)
+    return True
+
+
 def _server_defaulted_columns(table_class: type) -> frozenset[str]:
     """Return column names that have server defaults or are autoincrement PKs."""
     if not hasattr(table_class, "__table__"):

@@ -105,6 +105,7 @@ from sqldataclass.versioning import (
     version_field_name_for,
 )
 from sqldataclass.write import flatten_for_table as _flatten_for_table
+from sqldataclass.write import insert_if_absent_returning as _insert_if_absent_returning
 from sqldataclass.write import insert_many as _insert_many
 from sqldataclass.write import upsert_row_returning as _upsert_row_returning
 
@@ -2505,6 +2506,44 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
         flat = _flatten_for_table(self)
         _upsert_row_returning(conn, type(self), self, flat, index_elements=index_elements)
 
+    def _model_insert_if_absent(
+        self: Any,
+        conn: Connection | None = None,
+        *,
+        conflict_columns: list[str],
+    ) -> bool:
+        """``INSERT ... ON CONFLICT DO NOTHING`` for this instance.
+
+        Returns ``True`` if a row was inserted (and DB-generated columns are
+        hydrated on the instance via RETURNING), ``False`` if a row matching
+        *conflict_columns* already existed and the insert was suppressed.
+
+        Cascades many-to-one relationship inserts the same way ``insert()``
+        does. Not supported on joined-table inheritance children.
+        """
+        if getattr(type(self), "__sqldataclass_is_jti_child__", False):
+            msg = (
+                "insert_if_absent() is not supported on joined-table "
+                "inheritance children. Use insert() or update() instead."
+            )
+            raise NotImplementedError(msg)
+        if conn is None:
+            with _get_engine(type(self)).begin() as auto_conn:
+                return _model_insert_if_absent(
+                    self,
+                    auto_conn,
+                    conflict_columns=conflict_columns,
+                )
+        _insert_relationships(self, conn)
+        flat = _apply_discriminator_on_insert(type(self), _flatten_for_table(self))
+        return _insert_if_absent_returning(
+            conn,
+            type(self),
+            self,
+            flat,
+            conflict_columns=conflict_columns,
+        )
+
     def _model_update(
         klass: Any,
         values: dict[str, Any],
@@ -2611,6 +2650,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
     cls.delete = classmethod(_model_delete)
     cls.insert = _model_insert
     cls.upsert = _model_upsert
+    cls.insert_if_absent = _model_insert_if_absent
     cls.to_dict = _model_to_dict
 
 
@@ -2825,6 +2865,8 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
         def insert(self, conn: Connection | None = None) -> None: ...
 
         def upsert(self, conn: Connection | None = None, *, index_elements: list[str]) -> None: ...
+
+        def insert_if_absent(self, conn: Connection | None = None, *, conflict_columns: list[str]) -> bool: ...
 
         def to_dict(self, *, exclude_keys: frozenset[str] = frozenset()) -> dict[str, Any]: ...
 

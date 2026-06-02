@@ -2,6 +2,26 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [0.3.3] - 2026-06-02
+
+### Added
+
+- **`instance.insert_if_absent(conn, *, conflict_columns=[...])`** —
+  `INSERT ... ON CONFLICT DO NOTHING` with `RETURNING *`. Returns `True`
+  if a row was inserted (and DB-generated columns are hydrated on the
+  instance), `False` if a row matching *conflict_columns* already existed.
+
+  ```python
+  new_type = LineType(label="…", un_id=42, …)
+  if new_type.insert_if_absent(conn, conflict_columns=["line_type_hash"]):
+      return new_type.line_type_id  # freshly assigned PK
+  return None  # hash already existed; row untouched
+  ```
+
+  Cascades many-to-one relationship inserts the same way `insert()` does.
+  Not supported on joined-table-inheritance children (raises
+  `NotImplementedError`).
+
 ## [0.3.2] - 2026-06-02
 
 ### Added
