@@ -1326,13 +1326,14 @@ _BUILDING: set[str] = set()
 class SQLDataclassMeta(type):
     """Metaclass that transforms a class into a pydantic dataclass with an optional SA table."""
 
-    def __new__(
+    def __new__(  # noqa: PLR0913  # every class keyword is part of the public model-definition API
         mcs,
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
         versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag; override the contextvar via __migration_contextvar__ class attr
+        frozen: bool | None = None,  # noqa: FBT001  # bool flag; None lets inheritance children follow their parent
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -1350,7 +1351,7 @@ class SQLDataclassMeta(type):
         # Single-table inheritance: auto-detect if parent has __discriminator__
         sti_parent = _find_sti_parent(bases)
         if sti_parent is not None and not table:
-            inherited: type = _build_sti_child(mcs, name, bases, namespace, sti_parent)
+            inherited: type = _build_sti_child(mcs, name, bases, namespace, sti_parent, frozen=frozen)
             return inherited
 
         # Joined-table inheritance: table=True child of table=True parent (no discriminator)
@@ -1360,7 +1361,7 @@ class SQLDataclassMeta(type):
                 qualname = f"{namespace.get('__module__', '')}.{name}"
                 _BUILDING.add(qualname)
                 try:
-                    jti_child: type = _build_jti_child(mcs, name, bases, namespace, jti_parent)
+                    jti_child: type = _build_jti_child(mcs, name, bases, namespace, jti_parent, frozen=frozen)
                     return jti_child
                 finally:
                     _BUILDING.discard(qualname)
@@ -1378,6 +1379,7 @@ class SQLDataclassMeta(type):
                 table_parent,
                 exclude=frozenset(exclude),
                 include=frozenset(include) if include is not None else None,
+                frozen=frozen,
             )
             return response
 
@@ -1396,6 +1398,7 @@ class SQLDataclassMeta(type):
                 namespace,
                 table=table,
                 versioned=versioned,
+                frozen=bool(frozen),
                 **kwargs,
             )
             return result
@@ -1444,12 +1447,19 @@ def _find_table_parent(bases: tuple[type, ...]) -> Any | None:
     return None
 
 
-def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inherently complex
+def _resolve_frozen(parent: Any, *, frozen: bool | None) -> bool:
+    """Inherit the parent's frozen setting unless the child overrides it."""
+    return bool(parent.__dataclass_params__.frozen) if frozen is None else frozen
+
+
+def _build_sti_child(  # noqa: PLR0913, PLR0915  # single-table inheritance setup is inherently complex
     mcs: type,
     name: str,
     bases: tuple[type, ...],
     namespace: dict[str, Any],
     parent: Any,
+    *,
+    frozen: bool | None = None,
 ) -> Any:
     """Build a single-table inheritance child class.
 
@@ -1507,7 +1517,9 @@ def _build_sti_child(  # noqa: PLR0915  # single-table inheritance setup is inhe
         clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
         cls: Any = type.__new__(mcs, name, clean_bases, namespace)
         # STI children use extra="ignore" since the shared table has columns from other subtypes
-        dc_cls: Any = pydantic_dataclass(cls, config=_STI_CHILD_CONFIG, slots=True, kw_only=True)
+        dc_cls: Any = pydantic_dataclass(
+            cls, config=_STI_CHILD_CONFIG, slots=True, kw_only=True, frozen=_resolve_frozen(parent, frozen=frozen)
+        )
     finally:
         _BUILDING.discard(qualname)
 
@@ -1548,6 +1560,7 @@ def _build_response_model(  # noqa: PLR0912, PLR0913, PLR0915  # subset-view bui
     *,
     exclude: frozenset[str] = frozenset(),
     include: frozenset[str] | None = None,
+    frozen: bool | None = None,
 ) -> Any:
     """Build a pure pydantic dataclass that inherits fields from a table=True parent.
 
@@ -1622,7 +1635,9 @@ def _build_response_model(  # noqa: PLR0912, PLR0913, PLR0915  # subset-view bui
     try:
         clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
         cls: Any = type.__new__(mcs, name, clean_bases, namespace)
-        dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
+        dc_cls: Any = pydantic_dataclass(
+            cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True, frozen=_resolve_frozen(parent, frozen=frozen)
+        )
     finally:
         _BUILDING.discard(qualname)
 
@@ -1675,12 +1690,14 @@ class _MergedColumns:
         raise KeyError(name)
 
 
-def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setup is inherently complex
+def _build_jti_child(  # noqa: PLR0912, PLR0913, PLR0915  # joined-table inheritance setup is inherently complex
     mcs: type,
     name: str,
     bases: tuple[type, ...],
     namespace: dict[str, Any],
     parent: Any,
+    *,
+    frozen: bool | None = None,
 ) -> Any:
     """Build a joined-table inheritance child class.
 
@@ -1809,7 +1826,9 @@ def _build_jti_child(  # noqa: PLR0912, PLR0915  # joined-table inheritance setu
     # --- Build pydantic dataclass ---
     clean_bases = tuple(b for b in bases if not isinstance(b, SQLDataclassMeta)) or (object,)
     cls: Any = type.__new__(mcs, name, clean_bases, namespace)
-    dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
+    dc_cls: Any = pydantic_dataclass(
+        cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True, frozen=_resolve_frozen(parent, frozen=frozen)
+    )
 
     # --- Attach metadata ---
     dc_cls.__table__ = child_table
@@ -1859,6 +1878,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     *,
     table: bool,
     versioned: bool = False,
+    frozen: bool = False,
     **kwargs: Any,
 ) -> Any:
     """Core logic for building a SQLDataclass (called from metaclass __new__)."""
@@ -1936,7 +1956,7 @@ def _build_sqldataclass(  # noqa: PLR0912, PLR0913, PLR0915  # metaclass builder
     cls: Any = type.__new__(mcs, name, bases, namespace, **kwargs)
 
     # Apply pydantic dataclass with slots for memory efficiency
-    dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True)
+    dc_cls: Any = pydantic_dataclass(cls, config=_DATACLASS_CONFIG, slots=True, kw_only=True, frozen=frozen)
 
     # Attach SA table, relationships, non-column fields, and metadata
     dc_cls.__sqldataclass_is_table__ = table
