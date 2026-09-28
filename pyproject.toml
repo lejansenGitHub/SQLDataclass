@@ -47,7 +47,7 @@ dev = [
     "pytest-mock>=3.14",
     "pytest-timeout>=2.3",
     "diff-cover>=9.0",
-    "ruff>=0.15",
+    "ruff==0.15.8",
     "mypy>=1.14",
     "pre-commit>=4.0",
     "blueprint-linters>=0.10.0",
