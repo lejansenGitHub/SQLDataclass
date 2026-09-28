@@ -2704,6 +2704,8 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
             team: Team | None = Relationship()
     """
 
+    __slots__ = ()
+
     metadata: ClassVar[MetaData]
 
     @classmethod
