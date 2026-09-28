@@ -304,6 +304,17 @@ class Hero(SQLDataclass, table=True):
     team: Team | None = Relationship()
 ```
 
+When the target model is already defined, pass its column instead of a string. The
+reference is then resolved by Python, follows renames, and carries the target's schema:
+
+```python
+class Hero(SQLDataclass, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    name: str
+    team_id: int = Field(foreign_key=Team.c.id)
+    team: Team | None = Relationship()
+```
+
 ### Cascading insert
 
 When inserting a model with many-to-one relationships, related objects are inserted automatically. Unpersisted related objects (PK is `None`) are inserted first, and their generated PK is copied into the FK column — no manual ordering required:
@@ -515,7 +526,7 @@ class User(SQLDataclass, table=True):
 | `primary_key` | `bool` | Mark as primary key |
 | `index` | `bool` | Create database index |
 | `unique` | `bool` | Add unique constraint |
-| `foreign_key` | `str` | Foreign key reference (e.g. `"users.id"`) |
+| `foreign_key` | `str \| Column` | Foreign key reference, as `"users.id"` or a column object such as `User.c.id` |
 | `nullable` | `bool` | Override nullable inference |
 | `sa_type` | `TypeEngine` | Override SQLAlchemy column type |
 | `server_default` | `str` | SQL expression for DB-generated default (e.g. `"NOW()"`) |
