@@ -606,6 +606,27 @@ class Config(SQLDataclass, table=True):
     value: str = ""
 ```
 
+## Frozen models
+
+Pass `frozen=True` to make instances immutable value objects. The class becomes a frozen
+dataclass: field assignment raises `FrozenInstanceError`, and instances hash by value, so
+they work as set members and dict keys.
+
+```python
+class Node(SQLDataclass, table=True, frozen=True):
+    __table_args__ = {"schema": "assets"}
+    node_id: int = Field(primary_key=True)
+    name: str
+
+node = Node.load_one(where=Node.c.node_id == 1)
+node.name = "renamed"  # FrozenInstanceError
+```
+
+Loading, relationship stitching and `insert()` still work: the library writes DB-generated
+columns and loaded relationships with `object.__setattr__`, which bypasses the frozen guard.
+Inheritance children (single-table, joined-table and response models) follow their parent's
+setting unless they pass `frozen=` themselves.
+
 ## Array columns
 
 `list[T]` fields are automatically mapped to PostgreSQL `ARRAY` columns:

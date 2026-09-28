@@ -2,6 +2,29 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`frozen=True` class option** — builds the model as a frozen pydantic
+  dataclass. Field assignment raises `FrozenInstanceError` and instances hash
+  by value. `insert()`, relationship stitching and `load_all()` are unaffected
+  because the library hydrates instances with `object.__setattr__`.
+  Single-table, joined-table and response-model children inherit the parent's
+  setting unless they pass `frozen=` explicitly.
+
+  ```python
+  class Node(SQLDataclass, table=True, frozen=True):
+      node_id: int = Field(primary_key=True)
+      name: str
+  ```
+
+### Changed
+
+- **`Model.load_all()` options are keyword-only** — only `conn` may be
+  passed positionally; `where`, `order_by`, `limit`, `offset` and
+  `apply_default_where` must be named, as the documentation already shows.
+
 ## [0.3.3] - 2026-06-02
 
 ### Added
