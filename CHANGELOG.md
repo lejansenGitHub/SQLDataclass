@@ -26,7 +26,10 @@ All notable changes to SQLDataclass will be documented in this file.
   (measured: 104 → 88 B/row for a 2-field model, 248 → 232 B/row for 20
   fields). Assigning an attribute that is not a declared field now raises
   `AttributeError` instead of silently landing in a stray instance dict.
-  Inheritance children were already built without the dict.
+  Inheritance children were already built without the dict. As a
+  consequence, `Relationship(back_populates=...)` now raises a `TypeError`
+  at load time when the child model does not declare that field; the
+  back-reference used to be written into the stray dict.
 - **`Model.load_all()` options are keyword-only** — only `conn` may be
   passed positionally; `where`, `order_by`, `limit`, `offset` and
   `apply_default_where` must be named, as the documentation already shows.
