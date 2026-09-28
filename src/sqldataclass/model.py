@@ -1090,10 +1090,10 @@ def _populate_collections(  # noqa: PLR0912  # many relationship variants requir
             _load_one_to_many(
                 conn,
                 field_name,
-                child_type,
-                parent_table,
-                parent_pks,
-                pk_to_parents,
+                child_type=child_type,
+                parent_table=parent_table,
+                parent_pks=parent_pks,
+                pk_to_parents=pk_to_parents,
                 order_by=rel.order_by,
                 back_populates=rel.back_populates,
             )
@@ -1101,11 +1101,11 @@ def _populate_collections(  # noqa: PLR0912  # many relationship variants requir
             _load_many_to_many(
                 conn,
                 field_name,
-                child_type,
-                rel.link_model,
-                parent_table,
-                parent_pks,
-                pk_to_parents,
+                target_type=child_type,
+                link_model=rel.link_model,
+                parent_table=parent_table,
+                parent_pks=parent_pks,
+                pk_to_parents=pk_to_parents,
                 order_by=rel.order_by,
             )
 
@@ -1223,6 +1223,7 @@ def _populate_scalar_chains(objects: list[Any], conn: Connection, *, _depth: int
 def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all context params
     conn: Connection,
     field_name: str,
+    *,
     child_type: Any,
     parent_table: Table,
     parent_pks: list[Any],
@@ -1258,6 +1259,7 @@ def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all contex
 def _load_many_to_many(  # noqa: PLR0913  # relationship loading needs all context params
     conn: Connection,
     field_name: str,
+    *,
     target_type: Any,
     link_model: Any,
     parent_table: Table,
@@ -1331,9 +1333,10 @@ class SQLDataclassMeta(type):
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any],
-        table: bool = False,  # noqa: FBT001, FBT002  # bool flag required by metaclass __new__ protocol
-        versioned: bool = False,  # noqa: FBT001, FBT002  # bool flag; override the contextvar via __migration_contextvar__ class attr
-        frozen: bool | None = None,  # noqa: FBT001  # bool flag; None lets inheritance children follow their parent
+        *,
+        table: bool = False,
+        versioned: bool = False,
+        frozen: bool | None = None,
         **kwargs: Any,
     ) -> type:
         # Base class itself — just create it normally
@@ -2345,11 +2348,12 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
     def _model_load_all(  # noqa: PLR0913  # mirrors query.load_all signature
         klass: Any,
         conn: Connection | None = None,
+        *,
         where: Any = None,
         order_by: Any = None,
         limit: int | None = None,
         offset: int | None = None,
-        apply_default_where: bool = True,  # noqa: FBT001, FBT002  # opt-out switch for __default_where__
+        apply_default_where: bool = True,
     ) -> list[Any]:
         """Load all matching rows as instances of this class.
 

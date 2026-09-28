@@ -19,6 +19,12 @@ All notable changes to SQLDataclass will be documented in this file.
       name: str
   ```
 
+### Changed
+
+- **`Model.load_all()` options are keyword-only** — only `conn` may be
+  passed positionally; `where`, `order_by`, `limit`, `offset` and
+  `apply_default_where` must be named, as the documentation already shows.
+
 ## [0.3.3] - 2026-06-02
 
 ### Added
