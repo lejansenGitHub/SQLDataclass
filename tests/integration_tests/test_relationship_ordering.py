@@ -17,7 +17,7 @@ class OrdTeam(SQLDataclass, table=True):
     __tablename__ = "ord_team"
     id: int | None = Field(default=None, primary_key=True)
     name: str
-    heroes: list["OrdHero"] = Relationship(back_populates="team", order_by="name")
+    heroes: list["OrdHero"] = Relationship(order_by="name")
 
 
 class OrdHero(SQLDataclass, table=True):

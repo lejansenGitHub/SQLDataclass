@@ -24,7 +24,7 @@ class OtmTeam(SQLDataclass, table=True):
     __tablename__ = "otm_teams"
     id: int | None = Field(default=None, primary_key=True)
     name: str = ""
-    heroes: list[OtmHero] = Relationship(back_populates="team")
+    heroes: list[OtmHero] = Relationship()
 
 
 # Forward-ref variant: child type referenced as a string
@@ -39,7 +39,7 @@ class OtmFwdTeam(SQLDataclass, table=True):
     __tablename__ = "otm_fwd_teams"
     id: int | None = Field(default=None, primary_key=True)
     name: str = ""
-    heroes: list["OtmFwdHero"] = Relationship(back_populates="team")
+    heroes: list["OtmFwdHero"] = Relationship()
 
 
 # ---------------------------------------------------------------------------

@@ -1236,6 +1236,12 @@ def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all contex
     fk_col = _find_fk_column(child_table, parent_table)
     if fk_col is None:
         return
+    if back_populates is not None and back_populates not in child_type.__pydantic_fields__:
+        msg = (
+            f"back_populates={back_populates!r} names no field on {child_type.__name__}; "
+            f"declare it there, e.g. {back_populates}: Parent | None = Relationship()"
+        )
+        raise TypeError(msg)
 
     query = sa_select(child_table).where(fk_col.in_(parent_pks))
     if order_by is not None and order_by in child_table.c:
@@ -2703,6 +2709,8 @@ class SQLDataclass(metaclass=SQLDataclassMeta):
             team_id: int = Field(foreign_key="team.id")
             team: Team | None = Relationship()
     """
+
+    __slots__ = ()
 
     metadata: ClassVar[MetaData]
 
