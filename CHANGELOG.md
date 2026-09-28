@@ -19,6 +19,10 @@ All notable changes to SQLDataclass will be documented in this file.
       name: str
   ```
 
+- **`Field(foreign_key=Team.c.id)`** — `foreign_key` accepts a column object
+  in addition to a `"table.column"` string. The reference is resolved by
+  Python, follows renames, and carries the target table's schema.
+
 ### Changed
 
 - **`SQLDataclass` declares `__slots__ = ()`** — instances no longer carry

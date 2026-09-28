@@ -246,7 +246,7 @@ class SAColumnInfo:
     index: bool = False
     column: bool = True
     unique: bool = False
-    foreign_key: str | None = None
+    foreign_key: str | Column[Any] | None = None
     sa_type: Any = None
     server_default: Any = None
     sa_column_kwargs: dict[str, Any] | None = None
@@ -330,7 +330,7 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
     nullable: bool | None = None,
     index: bool = False,
     unique: bool = False,
-    foreign_key: str | None = None,
+    foreign_key: str | Column[Any] | None = None,
     sa_type: Any = None,
     server_default: Any = None,
     sa_column_kwargs: dict[str, Any] | None = None,
@@ -353,6 +353,8 @@ def Field(  # noqa: PLR0913  # many parameters required for SA column mapping
 
     Accepts all pydantic ``Field()`` parameters plus SA column parameters
     (``primary_key``, ``index``, ``unique``, ``foreign_key``, ``sa_type``).
+    ``foreign_key`` takes a ``"table.column"`` string or a column object such
+    as ``Team.c.id``, which also carries the target's schema.
     """
     sa_info = SAColumnInfo(
         primary_key=primary_key,
@@ -531,7 +533,7 @@ def _build_sa_column(
 
     # Positional args
     col_args: list[Any] = [field_name, col_type]
-    if sa_info.foreign_key:
+    if sa_info.foreign_key is not None:
         col_args.append(ForeignKey(sa_info.foreign_key))
 
     # Keyword args
