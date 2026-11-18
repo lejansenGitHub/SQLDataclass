@@ -4,6 +4,17 @@ All notable changes to SQLDataclass will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster multi-row loading** — `load_all`, `fetch_all`, relationship
+  loading (many-to-one, one-to-many, many-to-many) and single-table
+  inheritance read rows as tuples zipped with the column keys instead of
+  SQLAlchemy's per-row `.mappings()` view. `SQLModel` `load_all` uses each row
+  dict as the instance `__dict__` instead of copying it. Validation is
+  unchanged. Measured on SQLite: flat `load_all` 48 → 39 ms (10k × 20),
+  `SQLModel` `load_all` 36 → 28 ms, `fetch_all` 34 → 26 ms, one-to-many
+  9.3 → 6.8 ms, many-to-one + many-to-many 49 → 39 ms.
+
 ### Documentation
 
 - **README benchmark tables regenerated** by the new
