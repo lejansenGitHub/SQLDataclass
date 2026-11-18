@@ -143,6 +143,9 @@ ignore = [
 "test_*.py" = [
     "PLR2004",  # magic values in comparisons — expected in test assertions
 ]
+"benchmarks/*.py" = [
+    "T201",  # print — benchmark scripts report their tables on stdout
+]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "unittest.mock.patch".msg = "Use mocker.patch() from pytest-mock instead."
