@@ -38,15 +38,15 @@ Every approach builds from the same prebuilt row dicts, so B/row here is the obj
 
 | Approach | B/row | Time |
 |---|---:|---:|
-| Raw SQL → dict | 1,006 | 36 ms |
+| Raw SQL → dict | 1,006 | 37 ms |
 | Raw SQL → stdlib dataclass | 734 | 51 ms |
 | Raw SQL → pydantic dataclass | 750 | 64 ms |
-| **SQLDataclass `load_all`** | **734** | **39 ms** |
-| **SQLDataclass `SQLModel` `load_all`** | **1,246** | **29 ms** |
-| SQLAlchemy ORM `Session.query` | 1,830 | 44 ms |
-| SQLModel (tiangolo) `session.exec` | 2,141 | 48 ms |
+| **SQLDataclass `load_all`** | **734** | **38 ms** |
+| **SQLDataclass `SQLModel` `load_all`** | **3,342** | **47 ms** |
+| SQLAlchemy ORM `Session.query` | 1,830 | 43 ms |
+| SQLModel (tiangolo) `session.exec` | 2,141 | 47 ms |
 
-Times include opening the connection or session, query execution and object construction. Both `SQLDataclass` and `SQLModel` `load_all` bypass pydantic's `__init__` overhead — `SQLDataclass` uses `validate_python` (Rust fast path), `SQLModel` uses direct `__dict__` hydration (like the SA ORM does). `SQLModel` `load_all` uses **1.5x less memory than SA ORM** and **1.7x less than tiangolo's SQLModel**, and is 1.5–1.7x faster than both. Rows are read as plain tuples and zipped with the column keys; SQLAlchemy's per-row `.mappings()` view is skipped. Validation still runs on every `SQLDataclass` row.
+Times include opening the connection or session, query execution and object construction. Both `SQLDataclass` and `SQLModel` `load_all` validate every row through `validate_python`, which skips pydantic's `__init__` wrapper but runs all validators, so loaded objects behave exactly like constructed ones. Rows are read as plain tuples and zipped with the column keys; SQLAlchemy's per-row `.mappings()` view is skipped. Most of a `SQLModel` row's memory is pydantic's per-instance record of set fields (about 2.3 KB for 20 fields), which every `BaseModel` carries.
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
@@ -78,14 +78,14 @@ Each cell compares the column's model type against SQLAlchemy ORM / tiangolo's S
 
 | Benchmark | SQLDataclass | SQLDataclass `SQLModel` |
 |---|---|---|
-| **DB loading (memory)** | **2.5x / 2.9x less** | **1.5x / 1.7x less** |
-| **DB loading (speed)** | **1.1x / 1.2x faster** | **1.5x / 1.7x faster** |
+| **DB loading (memory)** | **2.5x / 2.9x less** | 1.8x / 1.6x more |
+| **DB loading (speed)** | **1.1x / 1.2x faster** | 1.1x slower / same |
 | **One-to-many (memory)** | **6.7x less** / — | — |
 | **Many-to-many (memory)** | **3.3x less** / — | — |
 | **Object construction (memory)** | **8x / 22x less** | 1.8x more / **1.6x less** |
 | **Object construction (speed)** | **6x / 14x faster** | **4x / 10x faster** |
 
-> **SQLDataclass vs SQLDataclass `SQLModel`**: For DB loading, `SQLModel` uses direct `__dict__` hydration (like the SA ORM) — **1,246 B/row**, beating both SA ORM (1,830) and tiangolo (2,141). For object construction (no DB), `SQLModel` uses 2,809 B/row due to `BaseModel.__dict__` overhead vs `SQLDataclass`'s 201 B/row (`slots=True`). Use `SQLDataclass` for maximum memory efficiency; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
+> **SQLDataclass vs SQLDataclass `SQLModel`**: Both validate on load. `SQLModel` pays for the `BaseModel` instance layout — a `__dict__` plus a per-instance set of field names — so it uses 2,809 B/row when constructed and 3,342 B/row when loaded, vs `SQLDataclass`'s 201 and 734 B/row (`slots=True`). Use `SQLDataclass` for maximum memory efficiency; use `SQLModel` when you need the full BaseModel API (`model_dump`, `model_validate`, JSON schema, etc.).
 
 ### Why the difference?
 

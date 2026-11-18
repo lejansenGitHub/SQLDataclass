@@ -2,6 +2,25 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Loaded `SQLModel` objects are complete `BaseModel` instances** — loading
+  used to set the instance `__dict__` directly, without pydantic's internal
+  attributes. On a loaded object, attribute assignment, `==`, `model_copy()`,
+  `model_fields_set` and `model_dump(exclude_unset=True)` raised
+  `AttributeError`.
+
+### Changed
+
+- **`SQLModel` loading validates every row**, like `SQLDataclass` loading
+  already did: field and model validators and `FillValueIfNone` now run on
+  rows from the database, and a required `column=False` field without a
+  value raises `ValidationError` on load. Cost on SQLite (10k × 20):
+  `SQLModel` `load_all` 29 → 47 ms and 1,246 → 3,342 B/row; most of the
+  memory is pydantic's per-instance set of field names.
+
 ## [0.4.1] - 2026-11-18
 
 ### Changed
