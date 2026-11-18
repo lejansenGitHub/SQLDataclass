@@ -2,6 +2,16 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [Unreleased]
+
+### Documentation
+
+- **README benchmark tables regenerated** by the new
+  `benchmarks/readme_tables.py` (`uv run python -m benchmarks.readme_tables`).
+  Time and memory are now measured in separate runs, because `tracemalloc`
+  makes allocation-heavy code about 3x slower. The old times were most likely
+  taken with it active (`load_all`: 211 ms in the old table, 48 ms now).
+
 ## [0.4.0] - 2026-11-18
 
 ### Added
