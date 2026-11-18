@@ -2,7 +2,7 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
-## [Unreleased]
+## [0.4.1] - 2026-11-18
 
 ### Changed
 
