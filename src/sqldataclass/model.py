@@ -99,6 +99,7 @@ from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.query import _fast_construct
 from sqldataclass.query import fetch_one as _fetch_one
 from sqldataclass.query import load_all as _load_all
+from sqldataclass.query import row_dicts as _row_dicts
 from sqldataclass.versioning import (
     __DO_MIGRATION__,
     do_migration,
@@ -965,10 +966,9 @@ def _hydrate_many_to_one(row_dict: dict[str, Any], rel: _ResolvedRelationship) -
     return None
 
 
-def _hydrate_row(cls: Any, row: Any) -> Any:
+def _hydrate_row(cls: Any, row_dict: dict[str, Any]) -> Any:
     """Hydrate a flat row (with labeled columns) into a nested model instance."""
     relationships: dict[str, _ResolvedRelationship] = cls.__relationships__
-    row_dict = dict(row)
 
     base_data = _extract_prefixed(row_dict, "__base__")
 
@@ -1173,9 +1173,9 @@ def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection)
         target_pk = list(target_table.primary_key.columns)[0]
         query = sa_select(target_table).where(target_pk.in_(fk_values))
         targets_by_pk: dict[Any, Any] = {}
-        for row in conn.execute(query).mappings():
-            target = _fast_construct(target_type, dict(row))
-            targets_by_pk[row[target_pk.name]] = target
+        for row_dict in _row_dicts(conn.execute(query)):
+            pk_value = row_dict[target_pk.name]
+            targets_by_pk[pk_value] = _fast_construct(target_type, row_dict)
 
         # Assign to objects
         for obj in objects:
@@ -1249,10 +1249,9 @@ def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all contex
     if order_by is not None and order_by in child_table.c:
         query = query.order_by(child_table.c[order_by])
     children_by_fk: dict[Any, list[Any]] = {}
-    for row in conn.execute(query).mappings():
-        child = _fast_construct(child_type, dict(row))
-        fk_value = row[fk_col.name]
-        children_by_fk.setdefault(fk_value, []).append(child)
+    for row_dict in _row_dicts(conn.execute(query)):
+        fk_value = row_dict[fk_col.name]
+        children_by_fk.setdefault(fk_value, []).append(_fast_construct(child_type, row_dict))
 
     for pk_val, parent_list in pk_to_parents.items():
         children = children_by_fk.get(pk_val, [])
@@ -1311,9 +1310,9 @@ def _load_many_to_many(  # noqa: PLR0913  # relationship loading needs all conte
     target_pk_name = target_pk.name
     target_cache: dict[Any, Any] = {}
     targets_by_source: dict[Any, list[Any]] = {}
-    for row in conn.execute(query).mappings():
-        source_fk_val = row["__link_source_fk__"]
-        target_data = _extract_prefixed(dict(row), "__target__")
+    for row_dict in _row_dicts(conn.execute(query)):
+        source_fk_val = row_dict["__link_source_fk__"]
+        target_data = _extract_prefixed(row_dict, "__target__")
         pk_val = target_data.get(target_pk_name)
         if pk_val not in target_cache:
             target_cache[pk_val] = _fast_construct(target_type, target_data)
@@ -2052,10 +2051,9 @@ def _polymorphic_load(conn: Connection, query: Any, cls: type[_T]) -> list[_T]:
 
     # Polymorphic: pick the right subtype per row
     results: list[_T] = []
-    for row in conn.execute(query).mappings():
-        disc_value = row.get(sti_column)
-        target_cls = sti_registry.get(disc_value, cls)
-        results.append(target_cls(**row))
+    for row_dict in _row_dicts(conn.execute(query)):
+        target_cls = sti_registry.get(row_dict.get(sti_column), cls)
+        results.append(target_cls(**row_dict))
     return results
 
 
@@ -2399,7 +2397,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
             results = _load_all(conn, query, klass)
         elif _has_join_relationships(rels):
             query = _apply_pagination(_build_joined_query(klass, where=where, order_by=order_by))
-            results = [_hydrate_row(klass, row) for row in conn.execute(query).mappings()]
+            results = [_hydrate_row(klass, row_dict) for row_dict in _row_dicts(conn.execute(query))]
         elif rels:
             query = sa_select(klass.__table__)
             if where is not None:
@@ -2457,7 +2455,7 @@ def _attach_convenience_methods(cls: Any) -> None:  # noqa: PLR0915  # attaches 
             row = conn.execute(query).mappings().one_or_none()
             if row is None:
                 return None
-            result = _hydrate_row(klass, row)
+            result = _hydrate_row(klass, dict(row))
         elif rels:
             query = sa_select(klass.__table__)
             if where is not None:

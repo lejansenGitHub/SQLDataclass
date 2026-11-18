@@ -39,14 +39,14 @@ Every approach builds from the same prebuilt row dicts, so B/row here is the obj
 | Approach | B/row | Time |
 |---|---:|---:|
 | Raw SQL → dict | 1,006 | 36 ms |
-| Raw SQL → stdlib dataclass | 734 | 50 ms |
-| Raw SQL → pydantic dataclass | 750 | 66 ms |
-| **SQLDataclass `load_all`** | **734** | **48 ms** |
-| **SQLDataclass `SQLModel` `load_all`** | **1,246** | **38 ms** |
-| SQLAlchemy ORM `Session.query` | 1,830 | 45 ms |
-| SQLModel (tiangolo) `session.exec` | 2,141 | 49 ms |
+| Raw SQL → stdlib dataclass | 734 | 51 ms |
+| Raw SQL → pydantic dataclass | 750 | 64 ms |
+| **SQLDataclass `load_all`** | **734** | **39 ms** |
+| **SQLDataclass `SQLModel` `load_all`** | **1,246** | **29 ms** |
+| SQLAlchemy ORM `Session.query` | 1,830 | 44 ms |
+| SQLModel (tiangolo) `session.exec` | 2,141 | 48 ms |
 
-Times include opening the connection or session, query execution and object construction. Both `SQLDataclass` and `SQLModel` `load_all` bypass pydantic's `__init__` overhead — `SQLDataclass` uses `validate_python` (Rust fast path), `SQLModel` uses direct `__dict__` hydration (like the SA ORM does). `SQLModel` `load_all` uses **1.5x less memory than SA ORM** and **1.7x less than tiangolo's SQLModel**, and is 1.2–1.3x faster than both.
+Times include opening the connection or session, query execution and object construction. Both `SQLDataclass` and `SQLModel` `load_all` bypass pydantic's `__init__` overhead — `SQLDataclass` uses `validate_python` (Rust fast path), `SQLModel` uses direct `__dict__` hydration (like the SA ORM does). `SQLModel` `load_all` uses **1.5x less memory than SA ORM** and **1.7x less than tiangolo's SQLModel**, and is 1.5–1.7x faster than both. Rows are read as plain tuples and zipped with the column keys; SQLAlchemy's per-row `.mappings()` view is skipped. Validation still runs on every `SQLDataclass` row.
 
 ### Complex models with relationships (100 teams, 5k heroes, 20 tags, SQLite)
 
@@ -68,7 +68,7 @@ Times include opening the connection or session, query execution and object cons
 
 ### When to use what
 
-- **Simple/flat models** — SQLDataclass uses 2.5x less memory than SA ORM when loading and 8x less when constructing; construction is 6x faster, loading is on par
+- **Simple/flat models** — SQLDataclass uses 2.5x less memory than SA ORM when loading and 8x less when constructing; construction is 6x faster, loading 1.1x faster
 - **One-to-many** — SQLDataclass wins (6.7x less memory, faster, with automatic back-references)
 - **Many-to-many** — SQLDataclass wins (3.3x less memory, faster, PK-based deduplication)
 
@@ -79,7 +79,7 @@ Each cell compares the column's model type against SQLAlchemy ORM / tiangolo's S
 | Benchmark | SQLDataclass | SQLDataclass `SQLModel` |
 |---|---|---|
 | **DB loading (memory)** | **2.5x / 2.9x less** | **1.5x / 1.7x less** |
-| **DB loading (speed)** | 1.1x slower / same | **1.2x / 1.3x faster** |
+| **DB loading (speed)** | **1.1x / 1.2x faster** | **1.5x / 1.7x faster** |
 | **One-to-many (memory)** | **6.7x less** / — | — |
 | **Many-to-many (memory)** | **3.3x less** / — | — |
 | **Object construction (memory)** | **8x / 22x less** | 1.8x more / **1.6x less** |
