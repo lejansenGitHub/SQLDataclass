@@ -2,6 +2,22 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- **Faster `SQLDataclass` loading, still fully validated** — rows go to
+  pydantic positionally, straight from the row tuple, instead of as a dict per
+  row. `SQLDataclass` classes are keyword-only, so loading compiles a
+  load-only validator per class from the same schema with keyword-only
+  switched off; validators, `__post_init__`, defaults and constraints behave
+  exactly as before, and a failing row is re-validated by name so the error
+  still names the field. Used by `load_all`, single-table inheritance and
+  relationship loading. Rows the positional path can't serve identically
+  (aliased fields, duplicate or unknown columns on classes that forbid extra
+  input) fall back to dict validation. SQLite, 100k × 20: building the objects
+  207 → 130 ms; `load_all` 408 → 344 ms including the fetch.
+
 ## [0.4.2] - 2026-11-19
 
 ### Fixed
