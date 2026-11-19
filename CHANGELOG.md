@@ -20,6 +20,8 @@ All notable changes to SQLDataclass will be documented in this file.
   value raises `ValidationError` on load. Cost on SQLite (10k × 20):
   `SQLModel` `load_all` 29 → 47 ms and 1,246 → 3,342 B/row; most of the
   memory is pydantic's per-instance set of field names.
+- **README benchmarks use 100k rows** (was 10k), so fixed per-call costs
+  don't dominate the times.
 
 ## [0.4.1] - 2026-11-18
 

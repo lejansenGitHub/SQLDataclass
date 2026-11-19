@@ -1,4 +1,4 @@
-"""Regenerate the README performance tables (SQLite, 10k rows, 20 fields).
+"""Regenerate the README performance tables (SQLite, 100k rows, 20 fields).
 
 Run from the repository root::
 
@@ -34,7 +34,6 @@ from sqlmodel import SQLModel, select
 from sqldataclass import SQLDataclass
 from sqldataclass import SQLModel as OurSQLModel
 from tests.performance_tests.test_comparison_benchmarks import (
-    ROW_COUNT,
     SAMPLE_ROW,
     BenchBaseModel,
     BenchOurSQLModel,
@@ -45,6 +44,8 @@ from tests.performance_tests.test_comparison_benchmarks import (
     _SABase,
 )
 
+ROW_COUNT = 100_000
+"""Larger than the CI benchmarks' 10k so fixed per-call costs don't dominate the times."""
 REPEATS = 15
 
 StdlibRow = dataclasses.make_dataclass(
@@ -94,12 +95,12 @@ def markdown_table(approaches: list[Approach]) -> str:
     memory = {label: retained_bytes_per_row(build) for label, build in approaches}
     timing = {label: median_milliseconds(build) for label, build in approaches}
     lines = ["| Approach | B/row | Time |", "|---|---:|---:|"]
-    lines += [f"| {label} | {memory[label]:,} | {timing[label]:.0f} ms |" for label, _ in approaches]
+    lines += [f"| {label} | {memory[label]:,} | {timing[label]:,.0f} ms |" for label, _ in approaches]
     return "\n".join(lines)
 
 
 def construction_approaches() -> list[Approach]:
-    """Build 10k objects from the same prebuilt row dicts, no database."""
+    """Build 100k objects from the same prebuilt row dicts, no database."""
     rows = [_row(index) for index in range(ROW_COUNT)]
     return [
         ("dict", lambda: [dict(row) for row in rows]),
@@ -114,7 +115,7 @@ def construction_approaches() -> list[Approach]:
 
 
 def seeded_sqlite_engine() -> Engine:
-    """In-memory SQLite with the same 10k rows in every benchmark table."""
+    """In-memory SQLite with the same 100k rows in every benchmark table."""
     engine = create_engine("sqlite:///:memory:")
     for metadata in (SQLDataclass.metadata, _SABase.metadata, OurSQLModel.metadata, SQLModel.metadata):
         metadata.create_all(engine)
@@ -126,7 +127,7 @@ def seeded_sqlite_engine() -> Engine:
 
 
 def loading_approaches(engine: Engine) -> list[Approach]:
-    """Load 10k rows; each approach opens its own connection or session."""
+    """Load 100k rows; each approach opens its own connection or session."""
     raw_query = text("SELECT * FROM bench_cmp_sdc")
 
     def raw_sql(construct: Callable[..., Any]) -> list[Any]:
@@ -165,9 +166,9 @@ def main() -> None:
         f"Python {platform.python_version()}, SQLAlchemy {sqlalchemy.__version__}, "
         f"pydantic {pydantic.VERSION}, sqlmodel {sqlmodel.__version__}, {platform.machine()}\n"
     )
-    print("### Object construction (20 fields, 10k objects, no DB)\n")
+    print("### Object construction (20 fields, 100k objects, no DB)\n")
     print(markdown_table(construction_approaches()))
-    print("\n### Database loading — SQLite (10k rows, 20 fields)\n")
+    print("\n### Database loading — SQLite (100k rows, 20 fields)\n")
     print(markdown_table(loading_approaches(seeded_sqlite_engine())))
 
 
