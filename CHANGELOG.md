@@ -2,7 +2,7 @@
 
 All notable changes to SQLDataclass will be documented in this file.
 
-## [Unreleased]
+## [0.4.3] - 2026-11-20
 
 ### Changed
 
@@ -16,7 +16,7 @@ All notable changes to SQLDataclass will be documented in this file.
   relationship loading. Rows the positional path can't serve identically
   (aliased fields, duplicate or unknown columns on classes that forbid extra
   input) fall back to dict validation. SQLite, 100k × 20: building the objects
-  207 → 130 ms; `load_all` 408 → 344 ms including the fetch.
+  207 → 126 ms; `load_all` 428 → 371 ms including the fetch (~195 ms).
 
 ## [0.4.2] - 2026-11-19
 
