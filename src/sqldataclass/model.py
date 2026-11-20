@@ -99,6 +99,7 @@ from sqldataclass.cy_function_helper import CyFunctionDetector
 from sqldataclass.query import _fast_construct
 from sqldataclass.query import fetch_one as _fetch_one
 from sqldataclass.query import load_all as _load_all
+from sqldataclass.query import row_builder as _row_builder
 from sqldataclass.query import row_dicts as _row_dicts
 from sqldataclass.versioning import (
     __DO_MIGRATION__,
@@ -1172,10 +1173,11 @@ def _reload_scalar_relationships(objects: list[Any], cls: Any, conn: Connection)
         target_table: Table = target_type.__table__
         target_pk = list(target_table.primary_key.columns)[0]
         query = sa_select(target_table).where(target_pk.in_(fk_values))
-        targets_by_pk: dict[Any, Any] = {}
-        for row_dict in _row_dicts(conn.execute(query)):
-            pk_value = row_dict[target_pk.name]
-            targets_by_pk[pk_value] = _fast_construct(target_type, row_dict)
+        result = conn.execute(query)
+        keys = tuple(result.keys())
+        build = _row_builder(target_type, keys)
+        pk_position = keys.index(target_pk.name)
+        targets_by_pk: dict[Any, Any] = {row[pk_position]: build(row) for row in result}
 
         # Assign to objects
         for obj in objects:
@@ -1248,10 +1250,13 @@ def _load_one_to_many(  # noqa: PLR0913  # relationship loading needs all contex
     query = sa_select(child_table).where(fk_col.in_(parent_pks))
     if order_by is not None and order_by in child_table.c:
         query = query.order_by(child_table.c[order_by])
+    result = conn.execute(query)
+    keys = tuple(result.keys())
+    build = _row_builder(child_type, keys)
+    fk_position = keys.index(fk_col.name)
     children_by_fk: dict[Any, list[Any]] = {}
-    for row_dict in _row_dicts(conn.execute(query)):
-        fk_value = row_dict[fk_col.name]
-        children_by_fk.setdefault(fk_value, []).append(_fast_construct(child_type, row_dict))
+    for row in result:
+        children_by_fk.setdefault(row[fk_position], []).append(build(row))
 
     for pk_val, parent_list in pk_to_parents.items():
         children = children_by_fk.get(pk_val, [])
@@ -2050,10 +2055,14 @@ def _polymorphic_load(conn: Connection, query: Any, cls: type[_T]) -> list[_T]:
         return _load_all(conn, query, cls)
 
     # Polymorphic: pick the right subtype per row
+    result = conn.execute(query)
+    keys = tuple(result.keys())
+    sti_position = keys.index(sti_column) if sti_column in keys else None
+    builders = {target_cls: _row_builder(target_cls, keys) for target_cls in {cls, *sti_registry.values()}}
     results: list[_T] = []
-    for row_dict in _row_dicts(conn.execute(query)):
-        target_cls = sti_registry.get(row_dict.get(sti_column), cls)
-        results.append(target_cls(**row_dict))
+    for row in result:
+        target_cls = cls if sti_position is None else sti_registry.get(row[sti_position], cls)
+        results.append(builders[target_cls](row))
     return results
 
 
